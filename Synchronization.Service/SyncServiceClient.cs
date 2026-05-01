@@ -20,6 +20,7 @@ namespace Synchronization.Service {
         private Guid id = Guid.NewGuid();
         private static object lockObj = new object();
         private bool heartbeatrunning = false;
+        private Dictionary<string, int> registrationsBySource = new Dictionary<string, int>();
 
         private SyncServiceClient() : base(new NamedPipeChannel(".", "NINA.Synchronization.Service.Sync", new NamedPipeChannelOptions() { ConnectionTimeout = 300000 })) {
         }
@@ -28,21 +29,28 @@ namespace Synchronization.Service {
         /// Register the client against the sync service
         /// </summary>
         public void RegisterSync(string source) {
-            base.Register(new ClientIdRequest() { Clientid = id.ToString(), Source = source }, null, deadline: DateTime.UtcNow.AddSeconds(5));
-            _ = StartHeartbeat();
+            base.Register(new ClientIdRequest() { Clientid = id.ToString(), Source = source }, new CallOptions(deadline: DateTime.UtcNow.AddSeconds(5)));
+            AddRegistration(source);
         }
 
         public override Empty Register(ClientIdRequest request, CallOptions options) {
-            _ = StartHeartbeat();
-            return base.Register(request, options);
+            var result = base.Register(request, options);
+            AddRegistration(request.Source);
+            return result;
         }
 
         /// <summary>
         /// Remove the client from the sync service
         /// </summary>
         public void UnregisterSync(string source) {
-            base.Unregister(new ClientIdRequest() { Clientid = id.ToString(), Source = source }, null, deadline: DateTime.UtcNow.AddSeconds(5));
-            StopHeartbeat();
+            base.Unregister(new ClientIdRequest() { Clientid = id.ToString(), Source = source }, new CallOptions(deadline: DateTime.UtcNow.AddSeconds(5)));
+            RemoveRegistration(source);
+        }
+
+        public override Empty Unregister(ClientIdRequest request, CallOptions options) {
+            var result = base.Unregister(request, options);
+            RemoveRegistration(request.Source);
+            return result;
         }
 
         /// <summary>
@@ -50,7 +58,7 @@ namespace Synchronization.Service {
         /// </summary>
         public async Task Register(string source) {
             await base.RegisterAsync(new ClientIdRequest() { Clientid = id.ToString(), Source = source }, null, deadline: DateTime.UtcNow.AddSeconds(5));
-            _ = StartHeartbeat();
+            AddRegistration(source);
         }
 
         /// <summary>
@@ -58,7 +66,7 @@ namespace Synchronization.Service {
         /// </summary>
         public async Task Unregister(string source) {
             await base.UnregisterAsync(new ClientIdRequest() { Clientid = id.ToString(), Source = source }, null, deadline: DateTime.UtcNow.AddSeconds(5));
-            StopHeartbeat();
+            RemoveRegistration(source);
         }
 
         /// <summary>
@@ -108,48 +116,96 @@ namespace Synchronization.Service {
             await base.WithdrawFromSyncAsync(new ClientIdRequest() { Clientid = id.ToString(), Source = source }, null, deadline: DateTime.UtcNow.AddSeconds(5), cancellationToken: ct);
         }
 
-    private Task StartHeartbeat() {
-            if(!heartbeatrunning) { 
-                lock (lockObj) {
-                    if (!heartbeatrunning) {
-                        heartbeatrunning = true;
-                        Logger.Info($"Starting heartbeat for {id}");
-                        return Task.Run(async () => {
-                            using (heartbeatCts = new CancellationTokenSource()) {
-                                var token = heartbeatCts.Token;
-                                while (!token.IsCancellationRequested) {
-                                    try {
-                                        await Task.Delay(1000, token);
-                                        var resp = await SyncServiceClient.Instance.Ping(token);
-                                    } catch (OperationCanceledException) {
-                                        Logger.Info($"Stopping heartbeat for {id}");
-                                    } catch (Exception ex) {
-                                        Logger.Error("An error occurred while pinging the server", ex);
-                                    }
-                                }
-                            }
-                        });
-                    } else {
-                        heartbeatrunning = false;
-                        return Task.CompletedTask;
-                    }
+        private void AddRegistration(string source) {
+            var shouldStartHeartbeat = false;
+
+            lock (lockObj) {
+                if (registrationsBySource.ContainsKey(source)) {
+                    registrationsBySource[source] += 1;
+                } else {
+                    registrationsBySource[source] = 1;
                 }
-            } else {
-                return Task.CompletedTask;
+
+                shouldStartHeartbeat = !heartbeatrunning;
+            }
+
+            if (shouldStartHeartbeat) {
+                _ = StartHeartbeat();
             }
         }
 
-        private void StopHeartbeat() {            
-            if(heartbeatrunning) {
-                lock (lockObj) {
-                    if (heartbeatrunning) {
-                        try {
-                            heartbeatCts?.Cancel();
-                        } catch (Exception) { }
-                        heartbeatrunning = false;
+        private void RemoveRegistration(string source) {
+            var shouldStopHeartbeat = false;
+
+            lock (lockObj) {
+                if (!registrationsBySource.ContainsKey(source)) {
+                    return;
+                }
+
+                registrationsBySource[source] -= 1;
+                if (registrationsBySource[source] <= 0) {
+                    registrationsBySource.Remove(source);
+                }
+
+                shouldStopHeartbeat = registrationsBySource.Values.Sum() == 0;
+            }
+
+            if (shouldStopHeartbeat) {
+                StopHeartbeat();
+            }
+        }
+
+        private Task StartHeartbeat() {
+            CancellationToken token;
+
+            lock (lockObj) {
+                if (heartbeatrunning) {
+                    return Task.CompletedTask;
+                }
+
+                if (registrationsBySource.Values.Sum() == 0) {
+                    return Task.CompletedTask;
+                }
+
+                heartbeatrunning = true;
+                heartbeatCts = new CancellationTokenSource();
+                token = heartbeatCts.Token;
+            }
+
+            Logger.Info($"Starting heartbeat for {id}");
+
+            return Task.Run(async () => {
+                while (!token.IsCancellationRequested) {
+                    try {
+                        await Task.Delay(1000, token);
+                        var resp = await SyncServiceClient.Instance.Ping(token);
+                    } catch (OperationCanceledException) {
+                        Logger.Info($"Stopping heartbeat for {id}");
+                    } catch (Exception ex) {
+                        Logger.Error("An error occurred while pinging the server", ex);
                     }
                 }
-            }            
+            });
+        }
+
+        private void StopHeartbeat() {
+            lock (lockObj) {
+                if (!heartbeatrunning) {
+                    return;
+                }
+
+                if (registrationsBySource.Values.Sum() > 0) {
+                    return;
+                }
+
+                try {
+                    heartbeatCts?.Cancel();
+                } catch (Exception) {
+                }
+
+                heartbeatrunning = false;
+                heartbeatCts = null;
+            }
         }
     }
 }

@@ -1,5 +1,11 @@
 ﻿# Changelog
 
+## Version 1.0.2.0
+- Improved synchronization reliability when N.I.N.A. instances disconnect, unregister, time out, or cancel while waiting at a synchronized point
+- Reduced the chance that a failed synchronized dither or wait can affect later synchronization points in the same session
+- Heartbeat handling is more robust when synchronization starts and stops quickly
+- Synchronized Dither now prevents invalid "After Exposures" values instead of silently running without dithering
+
 ## Version 1.0.1.0
 - Sync Dither will now register when starting the sequence, instead of when starting the instruction set it is inside
 - Sync Dither after exposures will no longer skip execution when clearing the image history

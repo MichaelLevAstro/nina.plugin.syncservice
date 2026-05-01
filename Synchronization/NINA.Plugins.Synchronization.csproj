@@ -28,21 +28,31 @@
     </PackageReference>
     <PackageReference Include="NINA.Plugin" Version="3.0.0.1056-nightly" />
   </ItemGroup>
-  <Target Name="PostBuildMacros">
-    <GetAssemblyIdentity AssemblyFiles="$(TargetPath)">
-      <Output TaskParameter="Assemblies" ItemName="Targets" />
-    </GetAssemblyIdentity>
-    <ItemGroup>
-      <VersionNumber Include="@(Targets->'%(Version)')" />
-    </ItemGroup>
-  </Target>
   <PropertyGroup>
-    <PostBuildEventDependsOn>
-			$(PostBuildEventDependsOn);
-			PostBuildMacros;
-		</PostBuildEventDependsOn>
+    <DeployToNinaLocal Condition="'$(DeployToNinaLocal)' == ''">true</DeployToNinaLocal>
+    <NinaLocalPluginDir>$(LOCALAPPDATA)\NINA\Plugins\3.0.0\Synchronization</NinaLocalPluginDir>
+    <NinaLocalPluginStagingDir>$(BaseIntermediateOutputPath)NinaLocalDeploy\</NinaLocalPluginStagingDir>
   </PropertyGroup>
-  <Target Name="PostBuild" AfterTargets="PostBuildEvent">
-    <Exec IgnoreExitCode="true" Command="if $(ConfigurationName) == Release (&#xD;&#xA;    echo  &quot;Trying to sign $(TargetPath)&quot;&#xD;&#xA;    signtool sign /t http://timestamp.digicert.com /v /a /fd SHA256 $(TargetPath)&#xD;&#xA;  &#xD;&#xA; &#xD;&#xA;)&#xD;&#xA;&#xD;&#xA;if not exist &quot;%25localappdata%25\NINA\Plugins&quot; (&#xD;&#xA;    echo &quot;Creating Plugins %25localappdata%25\NINA\Plugins folder&quot;&#xD;&#xA;    mkdir  &quot;%25localappdata%25\NINA\Plugins&quot;&#xD;&#xA;)&#xD;&#xA;&#xD;&#xA;if exist &quot;%25localappdata%25\NINA\Plugins\3.0.0\Synchronization&quot; (&#xD;&#xA;    echo &quot; folder cleanup&quot;&#xD;&#xA;    rmdir &quot;%25localappdata%25\NINA\Plugins\3.0.0\Synchronization&quot; /S /Q&#xD;&#xA;)&#xD;&#xA;&#xD;&#xA;if not exist &quot;%25localappdata%25\NINA\Plugins\3.0.0\Synchronization&quot; (&#xD;&#xA;    echo &quot;Creating %25localappdata%25\NINA\Plugin\Synchronization folder&quot;&#xD;&#xA;    mkdir  &quot;%25localappdata%25\NINA\Plugins\3.0.0\Synchronization&#xD;&#xA;)&#xD;&#xA;echo &quot;Copying $(PlatformName) $(TargetFileName)&quot;&#xD;&#xA;copy &quot;$(TargetDir)$(TargetFileName)&quot; &quot;%25localappdata%25\NINA\Plugins\3.0.0\Synchronization\$(TargetFileName)&quot; /Y&#xD;&#xA;&#xD;&#xA;copy &quot;$(TargetDir)NINA.Plugins.Synchronization.Service.dll&quot; &quot;%25localappdata%25\NINA\Plugins\3.0.0\Synchronization\NINA.Plugins.Synchronization.Service.dll&quot; /Y&#xD;&#xA;copy &quot;$(TargetDir)Grpc.Core.Api.dll&quot; &quot;%25localappdata%25\NINA\Plugins\3.0.0\Synchronization\Grpc.Core.Api.dll&quot; /Y&#xD;&#xA;copy &quot;$(TargetDir)GrpcDotNetNamedPipes.dll&quot; &quot;%25localappdata%25\NINA\Plugins\3.0.0\Synchronization\GrpcDotNetNamedPipes.dll&quot; /Y&#xD;&#xA;copy &quot;$(TargetDir)Google.Protobuf.dll&quot; &quot;%25localappdata%25\NINA\Plugins\3.0.0\Synchronization\Google.Protobuf.dll&quot; /Y&#xD;&#xA;" />
+  <Target Name="SignReleaseBuild" AfterTargets="Build" Condition="'$(Configuration)' == 'Release' and '$(SignPlugin)' == 'true'">
+    <Exec Command="signtool sign /t http://timestamp.digicert.com /v /a /fd SHA256 &quot;$(TargetPath)&quot;" />
+  </Target>
+  <Target Name="DeployLocalPlugin" AfterTargets="Build" Condition="'$(DeployToNinaLocal)' == 'true'">
+    <ItemGroup>
+      <NinaPluginDeploymentFiles Include="$(TargetPath)" />
+      <NinaPluginDeploymentFiles Include="$(TargetDir)NINA.Plugins.Synchronization.Service.dll" />
+      <NinaPluginDeploymentFiles Include="$(TargetDir)Grpc.Core.Api.dll" />
+      <NinaPluginDeploymentFiles Include="$(TargetDir)GrpcDotNetNamedPipes.dll" />
+      <NinaPluginDeploymentFiles Include="$(TargetDir)Google.Protobuf.dll" />
+    </ItemGroup>
+    <RemoveDir Directories="$(NinaLocalPluginStagingDir)" Condition="Exists('$(NinaLocalPluginStagingDir)')" />
+    <MakeDir Directories="$(NinaLocalPluginStagingDir)" />
+    <Copy SourceFiles="@(NinaPluginDeploymentFiles)" DestinationFolder="$(NinaLocalPluginStagingDir)" />
+    <ItemGroup>
+      <NinaPluginStagedDeploymentFiles Include="$(NinaLocalPluginStagingDir)*" />
+    </ItemGroup>
+    <RemoveDir Directories="$(NinaLocalPluginDir)" Condition="Exists('$(NinaLocalPluginDir)')" />
+    <MakeDir Directories="$(NinaLocalPluginDir)" />
+    <Copy SourceFiles="@(NinaPluginStagedDeploymentFiles)" DestinationFolder="$(NinaLocalPluginDir)" />
+    <RemoveDir Directories="$(NinaLocalPluginStagingDir)" Condition="Exists('$(NinaLocalPluginStagingDir)')" />
   </Target>
 </Project>

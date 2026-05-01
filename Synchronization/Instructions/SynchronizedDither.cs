@@ -76,7 +76,7 @@ namespace Synchronization.Instructions {
         }
 
         public bool Validate() {
-            var i = new List<string>();            
+            var i = new List<string>();
 
             Issues = i;
             return i.Count == 0;
@@ -89,7 +89,7 @@ namespace Synchronization.Instructions {
         public int AfterExposures {
             get => afterExposures;
             set {
-                afterExposures = value;
+                afterExposures = Math.Max(1, value);
                 RaisePropertyChanged();
             }
         }
@@ -130,64 +130,79 @@ namespace Synchronization.Instructions {
         }
 
         public override async Task Execute(ISequenceContainer context, IProgress<ApplicationStatus> progress, CancellationToken token) {
+            var source = nameof(SynchronizedDither);
+            var announced = false;
+            var syncCompleted = false;
+
             try {
                 if (AfterExposures > 0) {
-                    try {
-                        var waitTimeout = TimeSpan.FromSeconds(pluginSettings.GetValueInt32(nameof(SynchronizationPlugin.DitherWaitTimeout), 300));
-                        lastTriggerId = history.ImageHistory.Count;
-                        Logger.Info("Waiting for synchronization");
-                        progress?.Report(new ApplicationStatus() { Status = "Waiting for synchronization" });
-                        var info = guiderMediator.GetInfo();
-                        await client.AnnounceToSync(nameof(SynchronizedDither), info.Connected, token);
-                        var isLeader = await client.WaitForSyncStart(nameof(SynchronizedDither), token, waitTimeout);
+                    var waitTimeout = TimeSpan.FromSeconds(pluginSettings.GetValueInt32(nameof(SynchronizationPlugin.DitherWaitTimeout), 300));
+                    lastTriggerId = history.ImageHistory.Count;
+                    Logger.Info("Waiting for synchronization");
+                    progress?.Report(new ApplicationStatus() { Status = "Waiting for synchronization" });
+                    var info = guiderMediator.GetInfo();
+                    announced = true;
+                    await client.AnnounceToSync(source, info.Connected, token);
+                    var isLeader = await client.WaitForSyncStart(source, token, waitTimeout);
 
-                        Logger.Info("All Synchronized");
-                        progress?.Report(new ApplicationStatus() { Status = "All Synchronized" });
-                        if (isLeader) {
-                            try {
-                                Logger.Info("This instance leads the dither");
-                                await client.SetSyncInProgress(nameof(SynchronizedDither), token);
-                                progress?.Report(new ApplicationStatus() { Status = "This instance leads the dither" });
-                                await TriggerRunner.Run(progress, token);
-                                Logger.Info("Marking dither as complete");
-                                await client.SetSyncComplete(nameof(SynchronizedDither), token);
-                            } catch (RpcException e) {
-                                if (e.StatusCode == StatusCode.Cancelled) {
-                                    Logger.Info("The dither was cancelled - marking dither as complete");
-                                    await client.SetSyncComplete(nameof(SynchronizedDither), new CancellationToken());
-                                }
-                            } catch (OperationCanceledException) {
+                    Logger.Info("All Synchronized");
+                    progress?.Report(new ApplicationStatus() { Status = "All Synchronized" });
+                    if (isLeader) {
+                        try {
+                            Logger.Info("This instance leads the dither");
+                            await client.SetSyncInProgress(source, token);
+                            progress?.Report(new ApplicationStatus() { Status = "This instance leads the dither" });
+                            await TriggerRunner.Run(progress, token);
+                            Logger.Info("Marking dither as complete");
+                            await client.SetSyncComplete(source, token);
+                            syncCompleted = true;
+                        } catch (RpcException e) {
+                            if (e.StatusCode == StatusCode.Cancelled) {
                                 Logger.Info("The dither was cancelled - marking dither as complete");
-                                await client.SetSyncComplete(nameof(SynchronizedDither), new CancellationToken());                                
+                                await client.SetSyncComplete(source, CancellationToken.None);
+                                syncCompleted = true;
+                                throw new OperationCanceledException("The synchronized dither was cancelled", e, token);
                             }
 
-                            progress?.Report(new ApplicationStatus() { Status = "Dither is complete" });
-                        } else {
-                            Logger.Info("Waiting for leader to dither");
-                            progress?.Report(new ApplicationStatus() { Status = "Waiting for leader to dither" });
-                            await client.WaitForSyncComplete(nameof(SynchronizedDither), token, waitTimeout);
-                        }
-                    } catch (RpcException e) {
-                        if (e.StatusCode == StatusCode.Cancelled) {
+                            throw;
+                        } catch (OperationCanceledException) {
                             Logger.Info("The dither was cancelled - marking dither as complete");
-                            throw new OperationCanceledException();
-                        } else {
+                            await client.SetSyncComplete(source, CancellationToken.None);
+                            syncCompleted = true;
                             throw;
                         }
+
+                        progress?.Report(new ApplicationStatus() { Status = "Dither is complete" });
+                    } else {
+                        Logger.Info("Waiting for leader to dither");
+                        progress?.Report(new ApplicationStatus() { Status = "Waiting for leader to dither" });
+                        await client.WaitForSyncComplete(source, token, waitTimeout);
+                        syncCompleted = true;
                     }
                 } else {
                     return;
                 }
+            } catch (RpcException e) when (e.StatusCode == StatusCode.Cancelled) {
+                Logger.Info("The dither was cancelled");
+                throw new OperationCanceledException("The synchronized dither was cancelled", e, token);
             } catch (OperationCanceledException) {
-                Logger.Info("The dither was cancelled - marking dither as complete");
-                await client.WithdrawFromSync(nameof(SynchronizedDither), new CancellationToken());
+                Logger.Info("The dither was cancelled");
+                throw;
             } finally {
+                if (announced && !syncCompleted) {
+                    try {
+                        await client.WithdrawFromSync(source, CancellationToken.None);
+                    } catch (Exception ex) {
+                        Logger.Error("Failed to withdraw from synchronized dither", ex);
+                    }
+                }
                 progress?.Report(new ApplicationStatus() { Status = "" });
             }
         }
 
         public override bool ShouldTrigger(ISequenceItem previousItem, ISequenceItem nextItem) {
             if (previousItem == null && nextItem == null) { return false; }
+            if (AfterExposures <= 0) { return false; }
             RaisePropertyChanged(nameof(ProgressExposures));
             if (lastTriggerId > history.ImageHistory.Count) {
                 // The image history was most likely cleared

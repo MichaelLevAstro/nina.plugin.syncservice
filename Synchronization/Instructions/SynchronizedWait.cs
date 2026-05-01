@@ -73,6 +73,10 @@ namespace Synchronization.Instructions {
         }
 
         public override async Task Execute(IProgress<ApplicationStatus> progress, CancellationToken token) {
+            var source = nameof(SynchronizedWait);
+            var announced = false;
+            var syncCompleted = false;
+
             try {
                 var waitTimeout = TimeSpan.FromSeconds(pluginSettings.GetValueInt32(nameof(SynchronizationPlugin.DitherWaitTimeout), 300));
 
@@ -80,9 +84,10 @@ namespace Synchronization.Instructions {
                 progress?.Report(new ApplicationStatus() { Status = "Waiting for synchronization" });
 
                 await Task.Delay(200, token);
-                await client.AnnounceToSync(nameof(SynchronizedWait), true, token);
+                announced = true;
+                await client.AnnounceToSync(source, true, token);
 
-                var isLeader = await client.WaitForSyncStart(nameof(SynchronizedWait), token, waitTimeout);
+                var isLeader = await client.WaitForSyncStart(source, token, waitTimeout);
 
                 Logger.Info("All Synchronized");
                 progress?.Report(new ApplicationStatus() { Status = "All Synchronized" });
@@ -90,39 +95,49 @@ namespace Synchronization.Instructions {
                 if (isLeader) {
                     try {
                         Logger.Info("This instance leads the sync");
-                        await client.SetSyncInProgress(nameof(SynchronizedWait), token);
-                        await client.SetSyncComplete(nameof(SynchronizedWait), token);
+                        await client.SetSyncInProgress(source, token);
+                        await client.SetSyncComplete(source, token);
+                        syncCompleted = true;
 
                         Logger.Info("Marking sync as complete");
                         progress?.Report(new ApplicationStatus() { Status = "Sync is complete" });
                     } catch (RpcException e) {
                         if (e.StatusCode == StatusCode.Cancelled) {
                             Logger.Info("The sync was cancelled - marking sync as complete");
-                            await client.SetSyncComplete(nameof(SynchronizedWait), new CancellationToken());
+                            await client.SetSyncComplete(source, CancellationToken.None);
+                            syncCompleted = true;
+                            throw new OperationCanceledException("The synchronized wait was cancelled", e, token);
                         }
+
+                        throw;
                     } catch (OperationCanceledException) {
                         Logger.Info("The sync was cancelled - marking sync as complete");
-                        await client.SetSyncComplete(nameof(SynchronizedWait), new CancellationToken());
+                        await client.SetSyncComplete(source, CancellationToken.None);
+                        syncCompleted = true;
+                        throw;
                     }
                 } else {
                     Logger.Info("Waiting for leader to sync");
                     progress?.Report(new ApplicationStatus() { Status = "Waiting for leader to sync" });
-                    await client.WaitForSyncComplete(nameof(SynchronizedWait), token, waitTimeout);
+                    await client.WaitForSyncComplete(source, token, waitTimeout);
+                    syncCompleted = true;
                 }
 
 
-            } catch (RpcException e) {
-                if (e.StatusCode == StatusCode.Cancelled) {
-                    Logger.Info("The sync was cancelled - marking sync as complete");
-                    await client.WithdrawFromSync(nameof(SynchronizedWait), new CancellationToken());
-                    throw new OperationCanceledException();
-                } else {
-                    throw;
-                }
+            } catch (RpcException e) when (e.StatusCode == StatusCode.Cancelled) {
+                Logger.Info("The sync was cancelled");
+                throw new OperationCanceledException("The synchronized wait was cancelled", e, token);
             } catch (OperationCanceledException) {
-                Logger.Info("The sync was cancelled - marking sync as complete");
-                await client.WithdrawFromSync(nameof(SynchronizedWait), new CancellationToken());
+                Logger.Info("The sync was cancelled");
+                throw;
             } finally {
+                if (announced && !syncCompleted) {
+                    try {
+                        await client.WithdrawFromSync(source, CancellationToken.None);
+                    } catch (Exception ex) {
+                        Logger.Error("Failed to withdraw from synchronized wait", ex);
+                    }
+                }
                 progress?.Report(new ApplicationStatus() { Status = "" });
             }
         }
