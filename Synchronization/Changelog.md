@@ -1,5 +1,8 @@
 ﻿# Changelog
 
+## Version 1.0.3.0
+- Fixed a race where a fast leader could complete a synchronized wait before another instance observed the sync start, leaving that instance blocked until the leader sequence stopped
+
 ## Version 1.0.2.0
 - Improved synchronization reliability when N.I.N.A. instances disconnect, unregister, time out, or cancel while waiting at a synchronized point
 - Reduced the chance that a failed synchronized dither or wait can affect later synchronization points in the same session

@@ -53,6 +53,7 @@ namespace Synchronization.Service {
 
         private Dictionary<string, SortedDictionary<string, ClientSource>> registeredClients { get; }
         private Dictionary<string, SortedDictionary<string, bool>> clientsWaitingForSync { get; }
+        private Dictionary<string, Dictionary<string, string>> completedSyncLeaderByClient { get; }
         private ConcurrentDictionary<string, bool> syncInProgress;
         private ConcurrentDictionary<string, string> syncLeader;
 
@@ -85,6 +86,7 @@ namespace Synchronization.Service {
         private SyncServiceServer() {
             registeredClients = new Dictionary<string, SortedDictionary<string, ClientSource>>();
             clientsWaitingForSync = new Dictionary<string, SortedDictionary<string, bool>>();
+            completedSyncLeaderByClient = new Dictionary<string, Dictionary<string, string>>();
             statusBySource = new Dictionary<string, string>();
             syncInProgress = new ConcurrentDictionary<string, bool>();
             syncLeader = new ConcurrentDictionary<string, string>();
@@ -118,6 +120,7 @@ namespace Synchronization.Service {
                     client.Registrations -= 1;
                     if(client.Registrations == 0) {
                         registeredClients[source].Remove(id);
+                        RemoveClientReleasedFromCompletedSync(id, source);
                         RemoveClientWaitingForSync(id, source);
                         Logger.Info($"Client {id} unregistered sync with {source}");
                     } else {
@@ -135,6 +138,25 @@ namespace Synchronization.Service {
                     }
                 }
 
+            }
+        }
+
+        private bool TryGetCompletedSyncLeader(string id, string source, out string leaderId) {
+            lock (lockobj) {
+                leaderId = string.Empty;
+                return completedSyncLeaderByClient.ContainsKey(source)
+                    && completedSyncLeaderByClient[source].TryGetValue(id, out leaderId);
+            }
+        }
+
+        private void RemoveClientReleasedFromCompletedSync(string id, string source) {
+            lock (lockobj) {
+                if (completedSyncLeaderByClient.ContainsKey(source)) {
+                    completedSyncLeaderByClient[source].Remove(id);
+                    if (completedSyncLeaderByClient[source].Count == 0) {
+                        completedSyncLeaderByClient.Remove(source);
+                    }
+                }
             }
         }
 
@@ -275,15 +297,27 @@ namespace Synchronization.Service {
             Logger.Info($"Client {request.Clientid} is waiting to sync");
 
             try {
+                if (TryGetCompletedSyncLeader(request.Clientid, request.Source, out var completedLeaderId)) {
+                    return new LeaderReply() { LeaderId = completedLeaderId };
+                }
+
                 while (syncInProgress[request.Source] && ClientsAreWaitingForSync(request.Source)) {
                     await Task.Delay(10, context.CancellationToken);
+                    if (TryGetCompletedSyncLeader(request.Clientid, request.Source, out completedLeaderId)) {
+                        return new LeaderReply() { LeaderId = completedLeaderId };
+                    }
                 }
             } catch (OperationCanceledException) {
+                RemoveClientReleasedFromCompletedSync(request.Clientid, request.Source);
                 RemoveClientWaitingForSync(request.Clientid, request.Source);
                 throw;
             }
 
             lock (lockobj) {
+                if (TryGetCompletedSyncLeader(request.Clientid, request.Source, out var completedLeaderId)) {
+                    return new LeaderReply() { LeaderId = completedLeaderId };
+                }
+
                 // If the syncLeader is not empty it was already elected            
                 if (!syncLeader.ContainsKey(request.Source) || string.IsNullOrWhiteSpace(syncLeader[request.Source])) {
                     syncLeader[request.Source] = ElectSyncLeader(request.Source);
@@ -324,10 +358,22 @@ namespace Synchronization.Service {
             Logger.Info($"Client {request.Clientid} is waiting for sync completion {request.Source}");
 
             try {
+                if (TryGetCompletedSyncLeader(request.Clientid, request.Source, out _)) {
+                    RemoveClientReleasedFromCompletedSync(request.Clientid, request.Source);
+                    RemoveClientWaitingForSync(request.Clientid, request.Source);
+                    return new Empty();
+                }
+
                 while (syncInProgress[request.Source] && SyncLeaderIsAlive(request.Source)) {
                     await Task.Delay(10, context.CancellationToken);
+                    if (TryGetCompletedSyncLeader(request.Clientid, request.Source, out _)) {
+                        RemoveClientReleasedFromCompletedSync(request.Clientid, request.Source);
+                        RemoveClientWaitingForSync(request.Clientid, request.Source);
+                        return new Empty();
+                    }
                 }
             } catch (OperationCanceledException) {
+                RemoveClientReleasedFromCompletedSync(request.Clientid, request.Source);
                 RemoveClientWaitingForSync(request.Clientid, request.Source);
                 throw;
             }
@@ -362,9 +408,25 @@ namespace Synchronization.Service {
             lock (lockobj) {
                 Logger.Info($"Client {request.Clientid} is marking sync to be complete");
 
+                if (!clientsWaitingForSync.ContainsKey(request.Source)) {
+                    clientsWaitingForSync[request.Source] = new SortedDictionary<string, bool>();
+                }
+                if (!completedSyncLeaderByClient.ContainsKey(request.Source)) {
+                    completedSyncLeaderByClient[request.Source] = new Dictionary<string, string>();
+                }
+
+                foreach (var clientId in clientsWaitingForSync[request.Source].Keys) {
+                    if (clientId != request.Clientid) {
+                        completedSyncLeaderByClient[request.Source][clientId] = request.Clientid;
+                    }
+                }
+                if (completedSyncLeaderByClient[request.Source].Count == 0) {
+                    completedSyncLeaderByClient.Remove(request.Source);
+                }
+
+                clientsWaitingForSync[request.Source].Clear();
                 syncInProgress[request.Source] = false;
                 syncLeader[request.Source] = string.Empty;
-                RemoveClientWaitingForSync(request.Clientid, request.Source);
 
                 SetStatus(request.Source, string.Empty);
 
@@ -374,6 +436,7 @@ namespace Synchronization.Service {
 
         public override async Task<Empty> WithdrawFromSync(ClientIdRequest request, ServerCallContext context) {
             lock(lockobj) { 
+                RemoveClientReleasedFromCompletedSync(request.Clientid, request.Source);
                 RemoveClientWaitingForSync(request.Clientid, request.Source);
                 return new Empty();
             }
