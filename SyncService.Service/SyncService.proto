@@ -1,0 +1,65 @@
+syntax = "proto3";
+
+option csharp_namespace = "NINA.SyncService.Service.Sync";
+
+package NINA.SyncService.Service;
+
+import "google/protobuf/empty.proto";
+
+service SyncBus {
+	rpc Ping (ClientIdRequest) returns (PingReply);
+	rpc Register (ClientIdRequest) returns (google.protobuf.Empty);
+	rpc Unregister (ClientIdRequest) returns (google.protobuf.Empty);
+	rpc AnnounceToSync (AnnounceToSyncRequest) returns (google.protobuf.Empty);
+	rpc WithdrawFromSync (ClientIdRequest) returns (google.protobuf.Empty);
+	rpc WaitForSyncStart (ClientIdRequest) returns (LeaderReply);
+	rpc WaitForSyncCompleted (ClientIdRequest) returns (google.protobuf.Empty);
+	rpc SetSyncInProgress (ClientIdRequest) returns (google.protobuf.Empty);
+	rpc SetSyncCompleted (ClientIdRequest) returns (google.protobuf.Empty);
+	rpc SetFlag (FlagRequest) returns (google.protobuf.Empty);
+	rpc ClearFlag (FlagRequest) returns (google.protobuf.Empty);
+	rpc GetFlags (google.protobuf.Empty) returns (FlagsReply);
+}
+
+message ClientIdRequest {
+	string clientid = 1;
+	string source = 2;
+}
+
+message AnnounceToSyncRequest {
+	string clientid = 1;
+	bool canlead = 2;
+	string source = 3;
+}
+
+message PingReply {
+	string reply = 1;
+}
+
+message BooleanReply {
+	bool value = 1;
+}
+
+message LeaderReply {
+	string LeaderId = 1;
+}
+
+// Generic per-(key, client) push flag. Replaces the old mount-busy push and also carries
+// operation-pending (rendezvous wake-up) and autofocus-busy (reverse hold) state.
+message FlagRequest {
+	string key = 1;        // e.g. "MountBusy" | "MeridianFlip.Pending" | "CenterAfterDrift.Pending" | "Autofocus.Busy"
+	string clientid = 2;
+	string reason = 3;     // human readable, surfaced in the status line
+	int32 ttlseconds = 4;  // 0 => server default for that key
+}
+
+message FlagSnapshot {
+	string key = 1;
+	bool set = 2;          // true if at least one active setter for this key
+	string reason = 3;     // reason of the most-recently-refreshed setter
+	string ownerid = 4;    // client id of that setter
+}
+
+message FlagsReply {
+	repeated FlagSnapshot flags = 1;
+}

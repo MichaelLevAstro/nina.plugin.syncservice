@@ -13,6 +13,10 @@
 [Dd]ebugPublic/
 [Rr]elease/
 [Rr]eleases/
+
+# Plugin packaging output (build.ps1)
+dist/
+
 bld/
 [Bb]in/
 [Oo]bj/

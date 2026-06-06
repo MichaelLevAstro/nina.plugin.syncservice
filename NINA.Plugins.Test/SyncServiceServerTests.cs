@@ -1,6 +1,6 @@
-using NINA.Synchronization.Service.Sync;
+using NINA.SyncService.Service.Sync;
 using NUnit.Framework;
-using Synchronization.Service;
+using SyncService.Service;
 using System;
 using System.Threading;
 using System.Threading.Tasks;

@@ -2,27 +2,34 @@
 
 ## Project Purpose
 
-This repository contains the N.I.N.A. Synchronization plugin. It is intended for multi-camera imaging rigs that run multiple N.I.N.A. instances on one mount and need those instances to coordinate sequencing milestones.
+This repository contains the N.I.N.A. SyncService plugin. It is intended for multi-camera imaging rigs that run multiple N.I.N.A. instances on one mount and need those instances to coordinate sequencing milestones.
 
-The plugin adds two Advanced Sequencer components:
+The plugin adds explicit Advanced Sequencer instructions that coordinate planned operations across instances:
 
-- `Synchronized Dither`: a guider trigger that waits until all active N.I.N.A. instances reach the dither point, elects one guider-connected instance as leader, runs one real dither there, and lets the other instances wait until that dither completes.
-- `Synchronized Wait`: a utility sequence item that blocks all participating instances until each active instance reaches the same wait point. This is useful for aligning instances at target changes or other sequence boundaries.
+- `Synced Dither`: a guider trigger that waits until all active instances reach the dither point, elects one guider-connected leader, runs one real dither, and lets the others wait until it completes.
+- `Synced Meridian Flip` (mount instance) + `Synced Mount Check` (every other instance): the mount instance only flips after all other instances have arrived at their check; they hold until the flip completes. The check trigger also handles the recenter rendezvous and the reactive mount-busy hold.
+- `Synced Center after Drift` (mount instance): on measured drift, waits for the others (via their `Synced Mount Check`) before recentering.
+- `Synced Center and Slew` (mount instance): slews/centers while the others are held by their `Synced Mount Check` via the mount-busy flag.
+- `Synced Autofocus` (after exposures / time / HFR increase / temperature change / filter change): each instance runs its own autofocus, holds the mount instance from slewing while focusing, and yields to a due meridian flip (which preempts it; it re-runs after the flip).
+
+These delegate to the matching built-in N.I.N.A. trigger/item (hosted as a private field) and wrap them with the sync coordination, rather than re-implementing N.I.N.A.'s logic.
+
+A reactive mount-movement observer remains as a safety net for UNEXPECTED moves only (manual slews etc.), suppressed while a planned synced mount operation runs, and toggleable in the options.
 
 Only one instance hosts the synchronization server. The first N.I.N.A. process that loads the plugin starts a named-pipe gRPC server, and all instances communicate with that server. That host instance must stay alive for the whole synchronized acquisition.
 
 ## Repository Layout
 
-- `Synchronization.sln`: Visual Studio solution containing the plugin and service projects.
-- `Synchronization/`: main N.I.N.A. plugin assembly.
-  - `SynchronizationPlugin.cs`: plugin manifest/runtime entry point, server startup, status heartbeat, and plugin setting storage.
+- `SyncService.sln`: Visual Studio solution containing the plugin and service projects.
+- `SyncService/`: main N.I.N.A. plugin assembly.
+  - `SyncServicePlugin.cs`: plugin manifest/runtime entry point, server startup, status heartbeat, and plugin setting storage.
   - `Instructions/SynchronizedDither.cs`: synchronized guider trigger implementation.
   - `Instructions/SynchronizedWait.cs`: synchronized utility instruction implementation.
   - `Options.xaml` and `Options.xaml.cs`: plugin settings UI, icons, and sequence-item templates.
   - `Properties/AssemblyInfo.cs`: N.I.N.A. plugin metadata, version, minimum N.I.N.A. version, tags, URLs, and long description.
   - `Changelog.md`: user-facing release history.
-  - `SynchronizationLogo.jpg`, `SynchronizationSample.jpg`, `*.svg`, `*.ai`: plugin visuals and sequence icons.
-- `Synchronization.Service/`: shared named-pipe gRPC synchronization service.
+  - `SyncServiceLogo.jpg`, `SyncServiceSample.jpg`, `*.svg`, `*.ai`: plugin visuals and sequence icons.
+- `SyncService.Service/`: shared named-pipe gRPC synchronization service.
   - `SyncService.proto`: gRPC service contract and generated-code source.
   - `SyncServiceServer.cs`: in-process coordination server used by the first plugin instance.
   - `SyncServiceClient.cs`: singleton client used by all plugin instructions/triggers.
@@ -31,11 +38,11 @@ Only one instance hosts the synchronization server. The first N.I.N.A. process t
 
 ## Runtime Architecture
 
-The plugin uses `GrpcDotNetNamedPipes` on the pipe name `NINA.Synchronization.Service.Sync`.
+The plugin uses `GrpcDotNetNamedPipes` on the pipe name `NINA.SyncService.Service.Sync`.
 
-`SynchronizationPlugin.Initialize()` calls `StartServerIfNotStarted()`. A global mutex based on the plugin identifier prevents multiple N.I.N.A. instances from starting competing servers. If the pipe does not already exist, the instance creates a `NamedPipeServer`, binds `SyncServiceServer.Instance`, and starts a server heartbeat that writes the current sync status through `IApplicationStatusMediator`.
+`SyncServicePlugin.Initialize()` calls `StartServerIfNotStarted()`. A global mutex based on the plugin identifier prevents multiple N.I.N.A. instances from starting competing servers. If the pipe does not already exist, the instance creates a `NamedPipeServer`, binds `SyncServiceServer.Instance`, and starts a server heartbeat that writes the current sync status through `IApplicationStatusMediator`.
 
-The service tracks state by `source`, where the current sources are `SynchronizedDither` and `SynchronizedWait`. Keeping separate source keys prevents one instruction type from unblocking another.
+The service tracks barrier state by `source` (see `SyncSources`: `Dither`, `MeridianFlip`, `CenterAfterDrift`, plus `MountGuard`/`Autofocus` for heartbeat keep-alive). Keeping separate source keys prevents one instruction type from unblocking another. Alongside the barrier it keeps generic per-(key,client) push flags (`SetFlag`/`ClearFlag`/`GetFlags`) used for `MountBusy`, `<source>.Pending` (rendezvous wake-up), and `Autofocus.Busy` (reverse hold) - each with a ttl so a crashed setter cannot strand others.
 
 Each participating instance has a process-local GUID client id. Instructions register when their parent sequence context is running and unregister on teardown. The client sends a heartbeat once per second while registered. The server treats clients whose heartbeat timestamp is older than 30 seconds as inactive.
 
@@ -66,28 +73,29 @@ For `SynchronizedDither`, `canLead` is true only when `IGuiderMediator.GetInfo()
 The projects target `net8.0-windows` and use WPF:
 
 ```powershell
-dotnet restore .\Synchronization.sln
-dotnet build .\Synchronization.sln -c Debug
+dotnet restore .\SyncService.sln
+dotnet build .\SyncService.sln -c Debug
 ```
 
 The plugin depends on `NINA.Plugin` version `3.0.0.1056-nightly` and `Grpc.Tools` version `2.58.0`.
 
-There are no test projects in this repository. For behavioral changes, use a build as a minimum check and plan manual verification in multiple N.I.N.A. instances. The important manual scenarios are:
+There is a NUnit test project (`NINA.Plugins.Test`) covering the server barrier, the generic flags (set/get/clear/ttl/multi-setter), and the planned-op gate via a `TestServerCallContext` harness. Run `dotnet test SyncService.sln`. The instructions themselves need manual verification in multiple N.I.N.A. instances (with an ASCOM telescope simulator on the mount instance). The important manual scenarios are:
 
-- two or more instances reach `Synchronized Wait` and all continue only after everyone arrives;
-- only one guider-connected instance leads `Synchronized Dither`;
-- non-leader instances wait while the leader dithers and resume after completion;
-- timeout/cancellation does not leave later sync points stuck;
-- closing the server-hosting N.I.N.A. instance during a sequence is handled or documented for the user.
+- only one guider-connected instance leads `Synced Dither`; non-leaders wait and resume;
+- the mount instance only runs a `Synced Meridian Flip` / `Synced Center after Drift` once all other instances have arrived at their `Synced Mount Check`, then they resume;
+- `Synced Center and Slew` holds the other instances until the slew/center settles;
+- a mount move waits for an in-progress `Synced Autofocus`, but a due meridian flip preempts the autofocus (which re-runs after the flip);
+- an UNEXPECTED manual slew still pauses the others via the reactive observer (and not when its toggle is off);
+- timeout/cancellation/crash never leaves an instance stranded (ttl + heartbeat + per-wait timeouts fail open).
 
-The main plugin project has a post-build target that attempts to sign release builds and copy output files into `%localappdata%\NINA\Plugins\3.0.0\Synchronization`. The target has `IgnoreExitCode="true"`, but still be aware of local deployment side effects when building on Windows.
+The main plugin project has a post-build target that attempts to sign release builds and copy output files into `%localappdata%\NINA\Plugins\3.0.0\SyncService`. The target has `IgnoreExitCode="true"`, but still be aware of local deployment side effects when building on Windows.
 
 ## Packaging Notes
 
 The deployed plugin needs the main plugin assembly plus service/runtime dependencies. The current post-build copy list includes:
 
-- `Synchronization.dll`
-- `NINA.Plugins.Synchronization.Service.dll`
+- `SyncService.dll`
+- `NINA.Plugins.SyncService.Service.dll`
 - `Grpc.Core.Api.dll`
 - `GrpcDotNetNamedPipes.dll`
 - `Google.Protobuf.dll`

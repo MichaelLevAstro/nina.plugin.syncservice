@@ -2,8 +2,8 @@
   <PropertyGroup>
     <TargetFramework>net8.0-windows</TargetFramework>
     <OutputType>Library</OutputType>
-    <RootNamespace>Synchronization</RootNamespace>
-    <AssemblyName>Synchronization</AssemblyName>
+    <RootNamespace>SyncService</RootNamespace>
+    <AssemblyName>SyncService</AssemblyName>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     <UseWPF>true</UseWPF>
     <ImportWindowsDesktopTargets>true</ImportWindowsDesktopTargets>
@@ -19,7 +19,7 @@
     <Reference Include="System.Printing" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\Synchronization.Service\NINA.Plugins.Synchronization.Service.csproj" />
+    <ProjectReference Include="..\SyncService.Service\NINA.Plugins.SyncService.Service.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Grpc.Tools" Version="2.58.0">
@@ -30,7 +30,7 @@
   </ItemGroup>
   <PropertyGroup>
     <DeployToNinaLocal Condition="'$(DeployToNinaLocal)' == ''">true</DeployToNinaLocal>
-    <NinaLocalPluginDir>$(LOCALAPPDATA)\NINA\Plugins\3.0.0\Synchronization</NinaLocalPluginDir>
+    <NinaLocalPluginDir>$(LOCALAPPDATA)\NINA\Plugins\3.0.0\SyncService</NinaLocalPluginDir>
     <NinaLocalPluginStagingDir>$(BaseIntermediateOutputPath)NinaLocalDeploy\</NinaLocalPluginStagingDir>
   </PropertyGroup>
   <Target Name="SignReleaseBuild" AfterTargets="Build" Condition="'$(Configuration)' == 'Release' and '$(SignPlugin)' == 'true'">
@@ -39,7 +39,7 @@
   <Target Name="DeployLocalPlugin" AfterTargets="Build" Condition="'$(DeployToNinaLocal)' == 'true'">
     <ItemGroup>
       <NinaPluginDeploymentFiles Include="$(TargetPath)" />
-      <NinaPluginDeploymentFiles Include="$(TargetDir)NINA.Plugins.Synchronization.Service.dll" />
+      <NinaPluginDeploymentFiles Include="$(TargetDir)NINA.Plugins.SyncService.Service.dll" />
       <NinaPluginDeploymentFiles Include="$(TargetDir)Grpc.Core.Api.dll" />
       <NinaPluginDeploymentFiles Include="$(TargetDir)GrpcDotNetNamedPipes.dll" />
       <NinaPluginDeploymentFiles Include="$(TargetDir)Google.Protobuf.dll" />

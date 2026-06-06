@@ -24,13 +24,13 @@ namespace NINA.Plugins.Test {
             var tempRoot = Path.Combine(repoRoot, "NINA.Plugins.Test", "TestOutput", Guid.NewGuid().ToString("N"));
             var fakeBuildOutput = Path.Combine(tempRoot, "build");
             var pluginInstall = Path.Combine(tempRoot, "plugin");
-            var fakePluginDll = Path.Combine(fakeBuildOutput, "Synchronization.dll");
+            var fakePluginDll = Path.Combine(fakeBuildOutput, "SyncService.dll");
 
             Directory.CreateDirectory(fakeBuildOutput);
             WriteDeploymentFiles(fakeBuildOutput);
 
             try {
-                var projectPath = Path.Combine(repoRoot, "Synchronization", "NINA.Plugins.Synchronization.csproj");
+                var projectPath = Path.Combine(repoRoot, "SyncService", "NINA.Plugins.SyncService.csproj");
                 var result = RunDotnet(
                     repoRoot,
                     "msbuild",
@@ -42,8 +42,8 @@ namespace NINA.Plugins.Test {
                     "/v:minimal");
 
                 Assert.That(result.ExitCode, Is.Zero, result.Output);
-                Assert.That(File.Exists(Path.Combine(pluginInstall, "Synchronization.dll")), Is.True, result.Output);
-                Assert.That(File.Exists(Path.Combine(pluginInstall, "NINA.Plugins.Synchronization.Service.dll")), Is.True, result.Output);
+                Assert.That(File.Exists(Path.Combine(pluginInstall, "SyncService.dll")), Is.True, result.Output);
+                Assert.That(File.Exists(Path.Combine(pluginInstall, "NINA.Plugins.SyncService.Service.dll")), Is.True, result.Output);
             } finally {
                 if (Directory.Exists(tempRoot)) {
                     Directory.Delete(tempRoot, recursive: true);
@@ -58,7 +58,7 @@ namespace NINA.Plugins.Test {
             var fakeBuildOutput = Path.Combine(tempRoot, "build");
             var existingInstall = Path.Combine(tempRoot, "existing");
             var sentinelFile = Path.Combine(existingInstall, "sentinel.txt");
-            var fakePluginDll = Path.Combine(fakeBuildOutput, "Synchronization.dll");
+            var fakePluginDll = Path.Combine(fakeBuildOutput, "SyncService.dll");
 
             Directory.CreateDirectory(fakeBuildOutput);
             Directory.CreateDirectory(existingInstall);
@@ -66,7 +66,7 @@ namespace NINA.Plugins.Test {
             File.WriteAllText(sentinelFile, "existing install should survive failed deploy");
 
             try {
-                var projectPath = Path.Combine(repoRoot, "Synchronization", "NINA.Plugins.Synchronization.csproj");
+                var projectPath = Path.Combine(repoRoot, "SyncService", "NINA.Plugins.SyncService.csproj");
                 var result = RunDotnet(
                     repoRoot,
                     "msbuild",
@@ -90,7 +90,7 @@ namespace NINA.Plugins.Test {
         private static string FindRepoRoot() {
             var directory = new DirectoryInfo(TestContext.CurrentContext.TestDirectory);
             while (directory != null) {
-                if (File.Exists(Path.Combine(directory.FullName, "Synchronization.sln"))) {
+                if (File.Exists(Path.Combine(directory.FullName, "SyncService.sln"))) {
                     return directory.FullName;
                 }
 
@@ -101,8 +101,8 @@ namespace NINA.Plugins.Test {
         }
 
         private static void WriteDeploymentFiles(string directory) {
-            File.WriteAllText(Path.Combine(directory, "Synchronization.dll"), string.Empty);
-            File.WriteAllText(Path.Combine(directory, "NINA.Plugins.Synchronization.Service.dll"), string.Empty);
+            File.WriteAllText(Path.Combine(directory, "SyncService.dll"), string.Empty);
+            File.WriteAllText(Path.Combine(directory, "NINA.Plugins.SyncService.Service.dll"), string.Empty);
             File.WriteAllText(Path.Combine(directory, "Grpc.Core.Api.dll"), string.Empty);
             File.WriteAllText(Path.Combine(directory, "GrpcDotNetNamedPipes.dll"), string.Empty);
             File.WriteAllText(Path.Combine(directory, "Google.Protobuf.dll"), string.Empty);

@@ -15,6 +15,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Synchronization.Service\NINA.Plugins.Synchronization.Service.csproj" />
+    <ProjectReference Include="..\SyncService.Service\NINA.Plugins.SyncService.Service.csproj" />
   </ItemGroup>
 </Project>

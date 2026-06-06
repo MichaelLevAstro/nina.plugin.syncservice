@@ -1,4 +1,4 @@
-﻿using System.Reflection;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
@@ -6,7 +6,7 @@ using System.Runtime.Versioning;
 // General Information about an assembly is controlled through the following
 // set of attributes. Change these attribute values to modify the information
 // associated with an assembly.
-[assembly: AssemblyTitle("Synchronization")]
+[assembly: AssemblyTitle("SyncService")]
 [assembly: AssemblyDescription("A plugin that introduces synchronization instructions for multi camera imaging rigs")]
 [assembly: AssemblyConfiguration("")]
 [assembly: AssemblyCompany("Stefan Berg @isbeorn")]
@@ -24,7 +24,7 @@ using System.Runtime.Versioning;
 [assembly: ComVisible(false)]
 
 // The following GUID is for the ID of the typelib if this project is exposed to COM
-[assembly: Guid("c60db3b2-9a08-4b24-8938-bfb01e770eb9")]
+[assembly: Guid("a79e7f82-91ec-4587-bfd1-17adced9932a")]
 
 // Version information for an assembly consists of the following four values:
 //
@@ -35,9 +35,9 @@ using System.Runtime.Versioning;
 //
 // You can specify all the values or you can default the Build and Revision Numbers
 // by using the '*' as shown below:
-// [assembly: AssemblyVersion("1.0.*")]
-[assembly: AssemblyVersion("1.0.3.0")]
-[assembly: AssemblyFileVersion("1.0.3.0")]
+// [assembly: AssemblyVersion("1.2.0.0")]
+[assembly: AssemblyVersion("1.3.1.0")]
+[assembly: AssemblyFileVersion("1.3.1.0")]
 
 //The minimum Version of N.I.N.A. that this plugin is compatible with
 [assembly: AssemblyMetadata("MinimumApplicationVersion", "3.0.0.1056")]
@@ -49,17 +49,17 @@ using System.Runtime.Versioning;
 //The url to the license
 [assembly: AssemblyMetadata("LicenseURL", "https://www.mozilla.org/en-US/MPL/2.0/")]
 //The repository where your pluggin is hosted
-[assembly: AssemblyMetadata("Repository", "https://github.com/isbeorn/nina.plugin.synchronization")]
+[assembly: AssemblyMetadata("Repository", "https://github.com/MichaelLevAstro/nina.plugin.syncservice")]
 
-[assembly: AssemblyMetadata("ChangelogURL", "https://github.com/isbeorn/nina.plugin.synchronization/blob/master/Synchronization/Changelog.md")]
+[assembly: AssemblyMetadata("ChangelogURL", "https://github.com/MichaelLevAstro/nina.plugin.syncservice/blob/master/SyncService/Changelog.md")]
 
 //Common tags that quickly describe your plugin
-[assembly: AssemblyMetadata("Tags", "Dither,Synchronization,Multiple Cameras")]
+[assembly: AssemblyMetadata("Tags", "Dither,Synchronization,Multiple Cameras,Mount")]
 
 //The featured logo that will be displayed in the plugin list next to the name
-[assembly: AssemblyMetadata("FeaturedImageURL", "https://github.com/isbeorn/nina.plugin.synchronization/blob/master/Synchronization/SynchronizationLogo.jpg?raw=true")]
+[assembly: AssemblyMetadata("FeaturedImageURL", "https://github.com/MichaelLevAstro/nina.plugin.syncservice/blob/master/SyncService/SynchronizationLogo.jpg?raw=true")]
 //An example screenshot of your plugin in action
-[assembly: AssemblyMetadata("ScreenshotURL", "https://github.com/isbeorn/nina.plugin.synchronization/blob/master/Synchronization/SynchronizationSample.jpg?raw=true")]
+[assembly: AssemblyMetadata("ScreenshotURL", "https://github.com/MichaelLevAstro/nina.plugin.syncservice/blob/master/SyncService/SynchronizationSample.jpg?raw=true")]
 //An additional example screenshot of your plugin in action
 [assembly: AssemblyMetadata("AltScreenshotURL", "")]
 [assembly: AssemblyMetadata("LongDescription", @"This plugin is intended for people that want to dither on a setup with multiple cameras on one single mount. 
@@ -74,9 +74,19 @@ For that it has to be ensured that all imaging instances will sync up on each ot
 *Usage*:
 * The first instance of N.I.N.A. that starts will register a server that orchestrates the dither workflow. This instance must remain active for the complete duration of your imaging acquisition.  
 * To make use of the synchronized dithering a new instruction trigger is available for advanced sequences  
-* Simply replace your normal dither trigger with the 'Synchronized Dither' trigger  
+* Simply replace your normal dither trigger with the 'Synced Dither' trigger  
 * Each trigger will register itself against the server when the instruction set where the trigger is placed in is active and unregister itself automatically when the instruction set is left  
 * Make sure that your **exposure time * dither after exposures** roughly matches for each instance, as every time the trigger is fired the trigger will wait for all instances to be synced up  
-* When the triggers are synced up, one instance will be picked as the leader, among those that are connected to a guider, that will run the dither command. The others will wait for the dither to finish and then continue with the sequence  
+* When the triggers are synced up, one instance will be picked as the leader, among those that are connected to a guider, that will run the dither command. The others will wait for the dither to finish and then continue with the sequence
+
+*Synchronized mount operations*:
+Multiple cameras sharing one mount must also stop imaging while the mount moves. Place a 'Synced Mount Check' around the exposures on every instance that does NOT own the mount, then on the mount instance use:
+
+* 'Synced Meridian Flip' - the flip runs only after all other instances have paused at their check, then they resume.
+* 'Synced Center after Drift' - waits for the other instances before recentering.
+* 'Synced Center and Slew' - the other instances are held until the slew/center settles.
+* 'Synced Autofocus' (after exposures / time / HFR increase / temperature / filter change) - any instance focuses on its own and holds the mount from slewing while it does; a due meridian flip interrupts the autofocus and re-runs it afterwards.
+
+A safety net also pauses the other instances if the mount moves unexpectedly (a manual slew, another plugin, ...); this can be tuned or toggled in the plugin options.
 
 ")]

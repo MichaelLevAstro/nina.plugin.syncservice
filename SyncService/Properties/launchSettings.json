@@ -1,6 +1,6 @@
 {
   "profiles": {
-    "NINA.Plugins.Synchronization": {
+    "NINA.Plugins.SyncService": {
       "commandName": "Project"
     },
     "Profile 1": {

@@ -1,7 +1,7 @@
 using GrpcDotNetNamedPipes;
-using NINA.Synchronization.Service.Sync;
+using NINA.SyncService.Service.Sync;
 using NUnit.Framework;
-using Synchronization.Service;
+using SyncService.Service;
 using System;
 using System.Collections.Generic;
 using System.Reflection;
@@ -27,8 +27,8 @@ namespace NINA.Plugins.Test {
 
         [Test]
         public void UnregisterSync_KeepsHeartbeatRunningUntilAllRegistrationsAreRemoved() {
-            var pipe = new NamedPipeServer("NINA.Synchronization.Service.Sync");
-            SyncService.BindService(pipe.ServiceBinder, SyncServiceServer.Instance);
+            var pipe = new NamedPipeServer("NINA.SyncService.Service.Sync");
+            SyncBus.BindService(pipe.ServiceBinder, SyncServiceServer.Instance);
             pipe.Start();
 
             var client = SyncServiceClient.Instance;

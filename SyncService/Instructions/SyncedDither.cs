@@ -13,7 +13,7 @@ using NINA.Sequencer.Trigger;
 using NINA.Sequencer.Utility;
 using NINA.Sequencer.Validations;
 using NINA.WPF.Base.Interfaces.ViewModel;
-using Synchronization.Service;
+using SyncService.Service;
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
@@ -24,21 +24,21 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace Synchronization.Instructions {
+namespace SyncService.Instructions {
 
-    [ExportMetadata("Name", "Synchronized Dither")]
+    [ExportMetadata("Name", "Synced Dither")]
     [ExportMetadata("Description", "An instruction to coordinate a dither between multiple instances of N.I.N.A. - each instance needs to place this trigger into its sequence.")]
     [ExportMetadata("Icon", "SyncDitherSVG")]
-    [ExportMetadata("Category", "Lbl_SequenceCategory_Guider")]
+    [ExportMetadata("Category", "SyncService")]
     [Export(typeof(ISequenceTrigger))]
     [JsonObject(MemberSerialization.OptIn)]
-    public class SynchronizedDither : SequenceTrigger, IValidatable {
+    public class SyncedDither : SequenceTrigger, IValidatable {
         private IGuiderMediator guiderMediator;
         private IImageHistoryVM history;
         private IProfileService profileService;
 
         [ImportingConstructor]
-        public SynchronizedDither(IGuiderMediator guiderMediator, IImageHistoryVM history, IProfileService profileService) : base() {
+        public SyncedDither(IGuiderMediator guiderMediator, IImageHistoryVM history, IProfileService profileService) : base() {
             this.guiderMediator = guiderMediator;
             this.history = history;
             this.profileService = profileService;
@@ -50,12 +50,12 @@ namespace Synchronization.Instructions {
             this.pluginSettings = new PluginOptionsAccessor(profileService, Guid.Parse(id));
         }
 
-        private SynchronizedDither(SynchronizedDither cloneMe) : this(cloneMe.guiderMediator, cloneMe.history, cloneMe.profileService) {
+        private SyncedDither(SyncedDither cloneMe) : this(cloneMe.guiderMediator, cloneMe.history, cloneMe.profileService) {
             CopyMetaData(cloneMe);
         }
 
         public override object Clone() {
-            return new SynchronizedDither(this) {
+            return new SyncedDither(this) {
                 AfterExposures = AfterExposures,
                 TriggerRunner = (SequentialContainer)TriggerRunner.Clone()
             };
@@ -72,7 +72,7 @@ namespace Synchronization.Instructions {
         }
 
         public override string ToString() {
-            return $"Trigger: {nameof(SynchronizedDither)}, AfterExposures: {AfterExposures}";
+            return $"Trigger: {nameof(SyncedDither)}, AfterExposures: {AfterExposures}";
         }
 
         public bool Validate() {
@@ -109,7 +109,7 @@ namespace Synchronization.Instructions {
 
         public override void Initialize() {
             try {
-                client.RegisterSync(nameof(SynchronizedDither));
+                client.RegisterSync(SyncSources.Dither);
             } catch (Exception ex) {
                 Logger.Error(ex);
             }
@@ -117,7 +117,7 @@ namespace Synchronization.Instructions {
 
         public override void Teardown() {
             try {
-                client.UnregisterSync(nameof(SynchronizedDither));
+                client.UnregisterSync(SyncSources.Dither);
             } catch (Exception ex) {
                 Logger.Error(ex);
             }
@@ -130,13 +130,13 @@ namespace Synchronization.Instructions {
         }
 
         public override async Task Execute(ISequenceContainer context, IProgress<ApplicationStatus> progress, CancellationToken token) {
-            var source = nameof(SynchronizedDither);
+            var source = SyncSources.Dither;
             var announced = false;
             var syncCompleted = false;
 
             try {
                 if (AfterExposures > 0) {
-                    var waitTimeout = TimeSpan.FromSeconds(pluginSettings.GetValueInt32(nameof(SynchronizationPlugin.DitherWaitTimeout), 300));
+                    var waitTimeout = TimeSpan.FromSeconds(pluginSettings.GetValueInt32(nameof(SyncServicePlugin.DitherWaitTimeout), 300));
                     lastTriggerId = history.ImageHistory.Count;
                     Logger.Info("Waiting for synchronization");
                     progress?.Report(new ApplicationStatus() { Status = "Waiting for synchronization" });

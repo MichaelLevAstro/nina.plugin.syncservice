@@ -3,13 +3,13 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 16
 VisualStudioVersion = 16.0.31829.152
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NINA.Plugins.Synchronization", "Synchronization\NINA.Plugins.Synchronization.csproj", "{C60DB3B2-9A08-4B24-8938-BFB01E770EB9}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NINA.Plugins.SyncService", "SyncService\NINA.Plugins.SyncService.csproj", "{C60DB3B2-9A08-4B24-8938-BFB01E770EB9}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NINA.Plugins.Synchronization.Service", "Synchronization.Service\NINA.Plugins.Synchronization.Service.csproj", "{3E7D309F-2A2B-4874-955B-20B1F36FE8B7}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NINA.Plugins.SyncService.Service", "SyncService.Service\NINA.Plugins.SyncService.Service.csproj", "{3E7D309F-2A2B-4874-955B-20B1F36FE8B7}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NINA.Plugins.Test", "NINA.Plugins.Test\NINA.Plugins.Test.csproj", "{370D68AD-AE64-471E-B59B-4ACEF5A64265}"
 EndProject
-Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Synchronization.Service", "Synchronization.Service", "{6FCC4B1B-CBF1-6E15-C535-A5BC64E98C09}"
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "SyncService.Service", "SyncService.Service", "{6FCC4B1B-CBF1-6E15-C535-A5BC64E98C09}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

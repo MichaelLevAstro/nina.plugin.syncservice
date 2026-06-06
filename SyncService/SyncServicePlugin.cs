@@ -1,11 +1,13 @@
 ﻿using GrpcDotNetNamedPipes;
 using NINA.Core.Utility;
+using NINA.Equipment.Interfaces.Mediator;
 using NINA.Plugin;
 using NINA.Plugin.Interfaces;
 using NINA.Profile;
 using NINA.Profile.Interfaces;
 using NINA.WPF.Base.Interfaces.Mediator;
-using Synchronization.Service;
+using SyncService.MountActivity;
+using SyncService.Service;
 using System;
 using System.ComponentModel;
 using System.ComponentModel.Composition;
@@ -18,15 +20,16 @@ using System.Security.Principal;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace Synchronization {
+namespace SyncService {
 
     [Export(typeof(IPluginManifest))]
-    public class SynchronizationPlugin : PluginBase {
+    public class SyncServicePlugin : PluginBase {
 
         [ImportingConstructor]
-        public SynchronizationPlugin(IProfileService profileService, IApplicationStatusMediator statusMediator) {
+        public SyncServicePlugin(IProfileService profileService, IApplicationStatusMediator statusMediator, ITelescopeMediator telescopeMediator) {
             mutexid = $"Global\\{this.Identifier}";
             this.statusMediator = statusMediator;
+            this.telescopeMediator = telescopeMediator;
 
             var assembly = this.GetType().Assembly;
             var id = assembly.GetCustomAttribute<GuidAttribute>().Value;
@@ -39,6 +42,8 @@ namespace Synchronization {
 
         private string mutexid;
         private IApplicationStatusMediator statusMediator;
+        private ITelescopeMediator telescopeMediator;
+        private MountBusyObserver mountObserver;
         private PluginOptionsAccessor pluginSettings;
 
         private async Task StartServerIfNotStarted() {
@@ -59,7 +64,7 @@ namespace Synchronization {
                         }
 
                         try {
-                            var pipeName = "NINA.Synchronization.Service.Sync";
+                            var pipeName = "NINA.SyncService.Service.Sync";
 
                             if (!NamedPipeExist(pipeName)) {
                                 var user = WindowsIdentity.GetCurrent().User;
@@ -69,7 +74,7 @@ namespace Synchronization {
                                 security.SetGroup(user);
 
                                 pipe = new NamedPipeServer(pipeName, new NamedPipeServerOptions() { PipeSecurity = security });
-                                NINA.Synchronization.Service.Sync.SyncService.BindService(pipe.ServiceBinder, SyncServiceServer.Instance);
+                                NINA.SyncService.Service.Sync.SyncBus.BindService(pipe.ServiceBinder, SyncServiceServer.Instance);
                                 pipe.Start();
                                 isServer = true;
                                 Logger.Info($"Started synchronization plugin server on pipe {pipeName}");
@@ -94,6 +99,14 @@ namespace Synchronization {
             if (isServer) {
                 _ = StartServerHeartbeat();
             }
+
+            mountObserver = new MountBusyObserver(
+                telescopeMediator,
+                SyncServiceClient.Instance,
+                () => ReactiveMountObserverEnabled,
+                () => MountSettleTime,
+                () => MountCoordinateThreshold);
+            mountObserver.Start();
         }
 
         private Task StartServerHeartbeat() {
@@ -106,16 +119,17 @@ namespace Synchronization {
                             await Task.Delay(1000, cts.Token);
                             var status = SyncServiceServer.Instance.GetStatus();
 
-                            bool showActivitySymbols = status != SyncServiceServer.IdleString && !status.StartsWith("No instance could lead");
+                            // Always animate the spinner so the status line never freezes on a static "Idle".
+                            bool showActivitySymbols = true;
 
                             statusMediator.StatusUpdate(new NINA.Core.Model.ApplicationStatus() { Status = $"{status} {(showActivitySymbols ? symbols[roller++ % 4] : string.Empty)}", Source = "Sync Service" });
                         } catch (OperationCanceledException) {
                             Logger.Info("Stopping server heartbeat");
 
-                            statusMediator.StatusUpdate(new NINA.Core.Model.ApplicationStatus() { Status = "Synchronization server shutting down", Source = "Sync Service" });
+                            statusMediator.StatusUpdate(new NINA.Core.Model.ApplicationStatus() { Status = "SyncService server shutting down", Source = "Sync Service" });
                         } catch (Exception ex) {
                             Logger.Error("An error occurred while pinging the server", ex);
-                            statusMediator.StatusUpdate(new NINA.Core.Model.ApplicationStatus() { Status = "Synchronization server encountered an error", Source = "Sync Service" });
+                            statusMediator.StatusUpdate(new NINA.Core.Model.ApplicationStatus() { Status = "SyncService server encountered an error", Source = "Sync Service" });
                         }
                     }
                 }
@@ -124,6 +138,14 @@ namespace Synchronization {
         }
 
         public override async Task Teardown() {
+            // Dispose the observer first so it can send a final "mount idle" while the pipe is still alive.
+            try {
+                mountObserver?.Dispose();
+            } catch (Exception ex) {
+                Logger.Error("Failed to dispose mount observer", ex);
+            }
+            mountObserver = null;
+
             StopHeartbeat();
 
             try {
@@ -179,6 +201,70 @@ namespace Synchronization {
                 RaisePropertyChanged();
             }
         }
+
+        public bool MountSyncEnabled {
+            get => pluginSettings.GetValueBoolean(nameof(MountSyncEnabled), true);
+            set {
+                pluginSettings.SetValueBoolean(nameof(MountSyncEnabled), value);
+                RaisePropertyChanged();
+            }
+        }
+
+        public int MountSettleTime {
+            get => pluginSettings.GetValueInt32(nameof(MountSettleTime), 5);
+            set {
+                pluginSettings.SetValueInt32(nameof(MountSettleTime), Math.Max(0, value));
+                RaisePropertyChanged();
+            }
+        }
+
+        public int MountWaitTimeout {
+            get => pluginSettings.GetValueInt32(nameof(MountWaitTimeout), 600);
+            set {
+                pluginSettings.SetValueInt32(nameof(MountWaitTimeout), Math.Max(1, value));
+                RaisePropertyChanged();
+            }
+        }
+
+        public double MountCoordinateThreshold {
+            get => pluginSettings.GetValueDouble(nameof(MountCoordinateThreshold), 10d);
+            set {
+                pluginSettings.SetValueDouble(nameof(MountCoordinateThreshold), Math.Max(0d, value));
+                RaisePropertyChanged();
+            }
+        }
+
+        public bool ReactiveMountObserverEnabled {
+            get => pluginSettings.GetValueBoolean(nameof(ReactiveMountObserverEnabled), true);
+            set {
+                pluginSettings.SetValueBoolean(nameof(ReactiveMountObserverEnabled), value);
+                RaisePropertyChanged();
+            }
+        }
+
+        public int RendezvousTimeout {
+            get => pluginSettings.GetValueInt32(nameof(RendezvousTimeout), 600);
+            set {
+                pluginSettings.SetValueInt32(nameof(RendezvousTimeout), Math.Max(1, value));
+                RaisePropertyChanged();
+            }
+        }
+
+        public int AutofocusBusyWaitTimeout {
+            get => pluginSettings.GetValueInt32(nameof(AutofocusBusyWaitTimeout), 300);
+            set {
+                pluginSettings.SetValueInt32(nameof(AutofocusBusyWaitTimeout), Math.Max(1, value));
+                RaisePropertyChanged();
+            }
+        }
+
+        public int StartImagingTimeout {
+            get => pluginSettings.GetValueInt32(nameof(StartImagingTimeout), 1800);
+            set {
+                pluginSettings.SetValueInt32(nameof(StartImagingTimeout), Math.Max(1, value));
+                RaisePropertyChanged();
+            }
+        }
         public event PropertyChangedEventHandler PropertyChanged;
         protected void RaisePropertyChanged([CallerMemberName] string propertyName = null) {
             this.PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
@@ -192,7 +278,7 @@ namespace Synchronization {
          }
 
          static async void MainAsync() {
-             new SynchronizationPlugin();
+             new SyncServicePlugin();
 
              var client = DitherServiceClient.Instance;
              client.RegisterSync();

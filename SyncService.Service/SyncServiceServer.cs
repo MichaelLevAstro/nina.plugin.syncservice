@@ -1,14 +1,14 @@
 ﻿using Google.Protobuf.WellKnownTypes;
 using Grpc.Core;
 using NINA.Core.Utility;
-using NINA.Synchronization.Service.Sync;
+using NINA.SyncService.Service.Sync;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 
-namespace Synchronization.Service {
+namespace SyncService.Service {
     class ClientSource {
         public ClientSource(string id) {
             Id = id;
@@ -20,6 +20,18 @@ namespace Synchronization.Service {
         public DateTime DateTime { get; set; }
         public int Registrations { get; set; }
 
+    }
+
+    class FlagEntry {
+        public FlagEntry(DateTime time, string reason, TimeSpan ttl) {
+            Time = time;
+            Reason = reason;
+            Ttl = ttl;
+        }
+
+        public DateTime Time { get; set; }
+        public string Reason { get; set; }
+        public TimeSpan Ttl { get; set; }
     }
 
     /// <summary>
@@ -43,7 +55,7 @@ namespace Synchronization.Service {
     /// 
     /// Ping is required to determine keepalives
     /// </summary>
-    public class SyncServiceServer : SyncService.SyncServiceBase {
+    public class SyncServiceServer : SyncBus.SyncBusBase {
         public static readonly string IdleString = "Idle";
         private static readonly Lazy<SyncServiceServer> lazy = new Lazy<SyncServiceServer>(() => new SyncServiceServer());
         public static SyncServiceServer Instance { get => lazy.Value; }
@@ -56,6 +68,29 @@ namespace Synchronization.Service {
         private Dictionary<string, Dictionary<string, string>> completedSyncLeaderByClient { get; }
         private ConcurrentDictionary<string, bool> syncInProgress;
         private ConcurrentDictionary<string, string> syncLeader;
+
+        // Generic push flags - per (key, client). Independent of the per-source sync barriers.
+        // Used for "MountBusy" (planned moves + reactive observer), "<source>.Pending" (rendezvous wake-up
+        // for meridian flip / center-after-drift) and "Autofocus.Busy" (reverse hold blocking mount moves).
+        // Keyed by the client id that set it so multiple setters compose ("set if any active setter").
+        // Entries auto-expire after their per-entry ttl so a crashed setter can never strand waiting instances.
+        private Dictionary<string, Dictionary<string, FlagEntry>> flagsByKey = new Dictionary<string, Dictionary<string, FlagEntry>>();
+
+        /// <summary>
+        /// Default ttl per flag key, used when a SetFlag request does not specify one. Overridable for tests.
+        /// </summary>
+        public Dictionary<string, TimeSpan> DefaultFlagTtl { get; } = new Dictionary<string, TimeSpan>() {
+            ["MountBusy"] = TimeSpan.FromSeconds(15),
+            ["MeridianFlip.Pending"] = TimeSpan.FromSeconds(20),
+            ["CenterAfterDrift.Pending"] = TimeSpan.FromSeconds(20),
+            ["Autofocus.Busy"] = TimeSpan.FromSeconds(20),
+        };
+
+        /// <summary>Back-compat accessor for the mount-busy ttl (now just the "MountBusy" key default).</summary>
+        public TimeSpan MountBusyTtl {
+            get => DefaultFlagTtl.TryGetValue("MountBusy", out var t) ? t : TimeSpan.FromSeconds(15);
+            set => DefaultFlagTtl["MountBusy"] = value;
+        }
 
 
         private void SetStatus(string source, string message) {
@@ -447,6 +482,73 @@ namespace Synchronization.Service {
             UpdateClient(request.Clientid);
 
             return new PingReply() { Reply = "Pong" };
+        }
+
+        public override Task<Empty> SetFlag(FlagRequest request, ServerCallContext context) {
+            lock (lockobj) {
+                if (!flagsByKey.TryGetValue(request.Key, out var byClient)) {
+                    byClient = new Dictionary<string, FlagEntry>();
+                    flagsByKey[request.Key] = byClient;
+                }
+                var ttl = request.Ttlseconds > 0
+                    ? TimeSpan.FromSeconds(request.Ttlseconds)
+                    : (DefaultFlagTtl.TryGetValue(request.Key, out var d) ? d : TimeSpan.FromSeconds(15));
+                if (!byClient.ContainsKey(request.Clientid)) {
+                    Logger.Info($"Client {request.Clientid} set flag '{request.Key}' ({request.Reason})");
+                }
+                byClient[request.Clientid] = new FlagEntry(DateTime.UtcNow, request.Reason, ttl);
+                PurgeExpiredFlags(request.Key);
+                SetStatus(request.Key, BuildFlagStatus(request.Key));
+            }
+            return Task.FromResult(new Empty());
+        }
+
+        public override Task<Empty> ClearFlag(FlagRequest request, ServerCallContext context) {
+            lock (lockobj) {
+                if (flagsByKey.TryGetValue(request.Key, out var byClient) && byClient.Remove(request.Clientid)) {
+                    Logger.Info($"Client {request.Clientid} cleared flag '{request.Key}'");
+                }
+                PurgeExpiredFlags(request.Key);
+                SetStatus(request.Key, BuildFlagStatus(request.Key));
+            }
+            return Task.FromResult(new Empty());
+        }
+
+        public override Task<FlagsReply> GetFlags(Empty request, ServerCallContext context) {
+            lock (lockobj) {
+                var reply = new FlagsReply();
+                foreach (var key in flagsByKey.Keys.ToList()) {
+                    PurgeExpiredFlags(key);
+                    if (!flagsByKey.TryGetValue(key, out var byClient) || byClient.Count == 0) { continue; }
+                    var latest = byClient.OrderByDescending(x => x.Value.Time).First();
+                    reply.Flags.Add(new FlagSnapshot() {
+                        Key = key,
+                        Set = true,
+                        Reason = latest.Value.Reason ?? string.Empty,
+                        Ownerid = latest.Key
+                    });
+                }
+                return Task.FromResult(reply);
+            }
+        }
+
+        private void PurgeExpiredFlags(string key) {
+            // Caller must hold lockobj.
+            if (!flagsByKey.TryGetValue(key, out var byClient)) { return; }
+            var now = DateTime.UtcNow;
+            var expired = byClient.Where(x => x.Value.Time < now - x.Value.Ttl).Select(x => x.Key).ToList();
+            foreach (var id in expired) {
+                byClient.Remove(id);
+                Logger.Warning($"Flag '{key}' set by {id} expired without a refresh and was cleared");
+            }
+            if (byClient.Count == 0) { flagsByKey.Remove(key); }
+        }
+
+        private string BuildFlagStatus(string key) {
+            // Caller must hold lockobj.
+            if (!flagsByKey.TryGetValue(key, out var byClient) || byClient.Count == 0) { return string.Empty; }
+            var latest = byClient.OrderByDescending(x => x.Value.Time).First();
+            return string.IsNullOrWhiteSpace(latest.Value.Reason) ? key : latest.Value.Reason;
         }
     }
 }
