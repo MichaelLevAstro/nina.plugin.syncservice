@@ -175,6 +175,22 @@
                     Text="{Binding StartImagingTimeout}"
                     Unit="s" />
             </Grid>
+
+            <Grid Margin="0,2">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="260" />
+                    <ColumnDefinition />
+                </Grid.ColumnDefinitions>
+                <TextBlock VerticalAlignment="Center" Text="Guider Settle After Flip" />
+                <ninactrl:UnitTextBox
+                    Grid.Column="1"
+                    MinWidth="80"
+                    Margin="5,0,0,0"
+                    HorizontalAlignment="Left"
+                    VerticalAlignment="Center"
+                    Text="{Binding PostFlipSettleTime}"
+                    Unit="s" />
+            </Grid>
         </StackPanel>
     </DataTemplate>
     <DataTemplate DataType="{x:Type instruction:SyncedDither}">

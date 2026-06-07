@@ -265,6 +265,14 @@ namespace SyncService {
                 RaisePropertyChanged();
             }
         }
+
+        public int PostFlipSettleTime {
+            get => pluginSettings.GetValueInt32(nameof(PostFlipSettleTime), 30);
+            set {
+                pluginSettings.SetValueInt32(nameof(PostFlipSettleTime), Math.Max(0, value));
+                RaisePropertyChanged();
+            }
+        }
         public event PropertyChangedEventHandler PropertyChanged;
         protected void RaisePropertyChanged([CallerMemberName] string propertyName = null) {
             this.PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));

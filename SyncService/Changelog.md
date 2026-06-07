@@ -1,5 +1,8 @@
 ﻿# Changelog
 
+## Version 1.3.2.0
+- Synced Meridian Flip now holds the other instances for a configurable 'Guider Settle After Flip' time after the flip completes, so they no longer resume imaging before the guider has resumed and settled (default 30s; set 0 if not guiding)
+
 ## Version 1.3.1.0
 - 'Synced Center and Slew' renamed to 'Synced Slew and Center' (matches N.I.N.A.'s 'Slew and Center')
 - 'Synced Center after Drift' now shows the live last-check drift out of the configured maximum

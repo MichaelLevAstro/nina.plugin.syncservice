@@ -111,6 +111,15 @@ namespace SyncService.Instructions {
                 await SyncBarrier.RunAsLeader(client, src, timeout, async () => {
                     progress?.Report(new ApplicationStatus() { Status = "Performing meridian flip" });
                     await hosted.Execute(context, progress, token);
+
+                    // Hold the other instances a bit longer so the guider has resumed and settled before they
+                    // resume imaging - the flip routine can return while the guider is still recovering.
+                    var settle = pluginSettings.GetValueInt32(nameof(SyncServicePlugin.PostFlipSettleTime), 30);
+                    if (settle > 0) {
+                        Logger.Info($"Meridian flip complete - holding {settle}s for the guider to settle before releasing the other instances");
+                        progress?.Report(new ApplicationStatus() { Status = $"Waiting {settle}s for the guider to settle after the flip" });
+                        await Task.Delay(TimeSpan.FromSeconds(settle), token);
+                    }
                 }, token);
             } finally {
                 refreshCts.Cancel();
