@@ -321,9 +321,6 @@
     <DataTemplate DataType="{x:Type instruction:SyncedAutofocusAfterFilterChange}">
         <nina:SequenceBlockView />
     </DataTemplate>
-    <DataTemplate DataType="{x:Type instruction:SyncedStartImaging}">
-        <nina:SequenceBlockView />
-    </DataTemplate>
     <DataTemplate DataType="{x:Type instruction:SyncedBeginImaging}">
         <nina:SequenceBlockView />
     </DataTemplate>

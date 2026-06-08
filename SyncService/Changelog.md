@@ -1,5 +1,10 @@
 ﻿# Changelog
 
+## Version 1.3.3.0
+- 'Synced Begin Imaging' now auto-detects whether the instance is connected to the mount: the mount instance releases the others, every other instance waits here - so the single instruction goes on every instance at its ready-to-image point
+- Removed 'Synced Start Imaging' - place 'Synced Begin Imaging' on every instance instead. This fixes the mount instance getting stuck "waiting for the mount instance to begin imaging" when 'Synced Start Imaging' was placed on it by mistake
+- Breaking: sequences that used 'Synced Start Imaging' must replace it with 'Synced Begin Imaging'
+
 ## Version 1.3.2.0
 - Synced Meridian Flip now holds the other instances for a configurable 'Guider Settle After Flip' time after the flip completes, so they no longer resume imaging before the guider has resumed and settled (default 30s; set 0 if not guiding)
 

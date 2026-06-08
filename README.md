@@ -26,17 +26,16 @@ All instructions appear under **SyncService** in the "add instruction / add trig
 | **Synced Meridian Flip** | trigger | When a flip is due, pauses every other instance, waits until they have all stopped, runs N.I.N.A.'s full flip (stop guiding → flip → recenter → resume guiding → optional AF → settle), then releases them. |
 | **Synced Center after Drift** | trigger | When measured drift exceeds your threshold, pauses the others, recenters, then releases them. Shows the live *last drift / max* readout. |
 | **Synced Slew and Center** | instruction | Slews to the target and plate-solve centers while the others are held until it settles. |
-| **Synced Begin Imaging** | instruction | Place it where the mount instance is ready to image (after slewing, centering, guiding). Releases everyone waiting at *Synced Start Imaging* so all instances start together. |
 
 ### Place on every other (non-mount) instance
 | Instruction | Type | What it does |
 |---|---|---|
 | **Synced Mount Check** | trigger | Place once around the exposures. It pauses this instance whenever the mount instance runs a flip / recenter, and as a safety net for unexpected mount moves. **Required** — it's how the mount instance knows the others have stopped. The current exposure finishes first, then it holds. |
-| **Synced Start Imaging** | instruction | Place at the start of imaging. Waits here until the mount instance reaches *Synced Begin Imaging*, so all instances start together. |
 
 ### Place on any instance
 | Instruction | Type | What it does |
 |---|---|---|
+| **Synced Begin Imaging** | instruction | Place at each instance's ready-to-image point — on the mount instance, after slewing / centering / guiding. The mount instance releases the others, which wait here, so all start imaging together. Auto-detects the mount instance. |
 | **Synced Dither** | trigger | Coordinates a dither across all instances. One guider-connected instance leads the real dither; the rest wait for it to finish. |
 | **Synced Autofocus** (after Exposures / Time / HFR Increase / Temperature Change / Filter Change) | trigger | Each instance runs its own autofocus. While focusing it prevents the mount instance from slewing. A due meridian flip interrupts the autofocus and it re-runs automatically after the flip. |
 
@@ -91,10 +90,10 @@ A typical layout once installed:
 
 **Every other instance** sequence:
 1. Connect equipment, cool camera, etc.
-2. **Synced Start Imaging**  ← waits for the mount instance.
+2. **Synced Begin Imaging**  ← waits for the mount instance.
 3. Imaging loop, with **Synced Mount Check** around the exposures (plus **Synced Dither** / **Synced Autofocus** if you use them).
 
-Start all instances' sequences at roughly the same time. The others wait at *Synced Start Imaging* while the mount instance does its setup; when it reaches *Synced Begin Imaging* they all begin together. Thereafter, mount moves on the mount instance automatically pause the others via their *Synced Mount Check*.
+Start all instances' sequences at roughly the same time. The others wait at *Synced Begin Imaging* while the mount instance does its setup; when the mount instance reaches its own *Synced Begin Imaging* they all begin together. Thereafter, mount moves on the mount instance automatically pause the others via their *Synced Mount Check*.
 
 ### Prerequisites
 - Only **one** instance connected to the mount.
@@ -116,7 +115,7 @@ Start all instances' sequences at roughly the same time. The others wait at *Syn
 | Pause aux on unexpected mount moves | The automatic safety net for unplanned moves. |
 | Flip / Drift Rendezvous Timeout | Max the mount instance waits for the others before a flip/recenter (set above your longest sub-exposure). |
 | Autofocus Wait Timeout | Max the mount instance waits for an autofocus to finish before moving. |
-| Start Imaging Timeout | Max wait at *Synced Start Imaging*. |
+| Start Imaging Timeout | Max wait at *Synced Begin Imaging*. |
 
 ---
 
