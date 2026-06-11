@@ -14,10 +14,24 @@ namespace SyncService.Instructions {
     /// </summary>
     internal static class SyncBarrier {
         /// <summary>
+        /// Is the fleet-wide service on? Uses the heartbeat-cached value when it already reads active; if it reads
+        /// stopped we confirm with one fresh server read before bypassing coordination, so an instance that hits a
+        /// sync point in the brief window right after the service was started still joins instead of racing ahead.
+        /// A server we cannot reach is treated as stopped (fail open: proceed uncoordinated rather than hang).
+        /// </summary>
+        private static async Task<bool> ServiceIsActive(ISyncServiceClient client) {
+            if (client.ServiceActiveCached) { return true; }
+            try { return await client.RefreshServiceState(CancellationToken.None); } catch (Exception) { return false; }
+        }
+
+        /// <summary>
         /// MAIN side: announce, wait until every aux has arrived, run <paramref name="work"/> while they wait,
         /// then release them. The caller raises/clears the operation-pending flag around this.
         /// </summary>
         public static async Task RunAsLeader(ISyncServiceClient client, string source, TimeSpan timeout, Func<Task> work, CancellationToken token) {
+            // Service stopped: skip the rendezvous and just do the work - no instance is coordinating.
+            if (!await ServiceIsActive(client)) { await work(); return; }
+
             var announced = false;
             var completed = false;
             try {
@@ -48,6 +62,9 @@ namespace SyncService.Instructions {
         /// a leaderless or timed-out rendezvous lets this instance proceed rather than crash or strand.
         /// </summary>
         public static async Task RunAsFollower(ISyncServiceClient client, string source, TimeSpan timeout, CancellationToken token) {
+            // Service stopped: nothing to wait for - proceed immediately.
+            if (!await ServiceIsActive(client)) { return; }
+
             var announced = false;
             var completed = false;
             try {
@@ -64,6 +81,55 @@ namespace SyncService.Instructions {
                 Logger.Warning($"Synchronized {source} did not complete ({ex.Message}) - proceeding");
             } finally {
                 if (announced && !completed) { await SafeWithdraw(client, source); }
+            }
+        }
+
+        /// <summary>
+        /// MAIN side: run a planned mount operation as the single leader of the shared <see cref="SyncSources.MountOp"/>
+        /// rendezvous. Every (main) mount instruction - dither, meridian flip, center-after-drift - funnels through
+        /// here, so only ONE mount operation can run at a time and a cross-instruction deadlock is impossible by
+        /// construction (the single-threaded main can never be in two of them at once, and the aux only ever follow).
+        ///
+        /// Non-flip operations honor the autofocus reverse-hold: they wait while any instance is focusing. The
+        /// time-critical meridian flip instead PREEMPTS autofocus (<paramref name="preemptAutofocus"/>) - it signals
+        /// every instance to cancel its autofocus and re-run it after the flip, rather than holding the flip. For the
+        /// whole operation the reactive observer is suppressed and the MountOp pending flag is held, so every Synced
+        /// Mount Check holds; the rendezvous then waits until they have all arrived before <paramref name="work"/> runs.
+        /// </summary>
+        public static async Task RunMountOperation(ISyncServiceClient client, string kind, bool preemptAutofocus,
+                TimeSpan rendezvousTimeout, TimeSpan autofocusWaitTimeout, Func<Task> work,
+                IProgress<ApplicationStatus> progress, CancellationToken token) {
+            // Service stopped: run the mount operation directly, without the autofocus hold/preempt, the
+            // pending flag or the rendezvous. The operation itself (dither / flip / recenter) still happens.
+            if (!await ServiceIsActive(client)) { await work(); return; }
+
+            var src = SyncSources.MountOp;
+
+            if (preemptAutofocus) {
+                try { await client.SetAutofocusPreempt(kind, token); } catch (Exception ex) { Logger.Error(ex); }
+            } else {
+                await WaitWhileAutofocusBusy(client, autofocusWaitTimeout, progress, token);
+            }
+
+            client.BeginPlannedMountOperation();
+            using var refreshCts = CancellationTokenSource.CreateLinkedTokenSource(token);
+            Task refreshTask = null;
+            try {
+                await client.SetOperationPending(src, kind, token);
+                refreshTask = RefreshLoop(async ct => {
+                    await client.SetOperationPending(src, kind, ct);
+                    if (preemptAutofocus) { await client.SetAutofocusPreempt(kind, ct); }
+                }, 5000, refreshCts.Token);
+
+                progress?.Report(new ApplicationStatus() { Status = $"Waiting for all instances before {kind.ToLowerInvariant()}" });
+                await RunAsLeader(client, src, rendezvousTimeout, work, token);
+            } finally {
+                refreshCts.Cancel();
+                if (refreshTask != null) { try { await refreshTask; } catch (Exception) { } }
+                try { await client.ClearOperationPending(src, CancellationToken.None); } catch (Exception ex) { Logger.Error(ex); }
+                if (preemptAutofocus) { try { await client.ClearAutofocusPreempt(CancellationToken.None); } catch (Exception ex) { Logger.Error(ex); } }
+                client.EndPlannedMountOperation();
+                progress?.Report(new ApplicationStatus() { Status = "" });
             }
         }
 

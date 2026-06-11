@@ -21,8 +21,8 @@ using System.Threading.Tasks;
 
 namespace SyncService.Instructions {
 
-    [ExportMetadata("Name", "Synced Slew and Center")]
-    [ExportMetadata("Description", "On the instance connected to the mount, waits for any autofocus to finish, then slews to the target and plate-solve centers, while every other instance is paused (held by their Synced Mount Check) until the mount settles. Only place this on the mount instance - it does nothing elsewhere.")]
+    [ExportMetadata("Name", "Synced Slew and Center (main)")]
+    [ExportMetadata("Description", "Place on the mount instance. Waits for any autofocus to finish, then slews to the target and plate-solve centers, while every other instance is paused (held by their Synced Mount Check) until the mount settles. Unlike the other mount operations this uses the mount-busy hold rather than a rendezvous, so it is safe to run before the others have started imaging (e.g. at session start). Does nothing on instances without a mount.")]
     [ExportMetadata("Icon", "SyncMountSVG")]
     [ExportMetadata("Category", "SyncService")]
     [Export(typeof(ISequenceItem))]

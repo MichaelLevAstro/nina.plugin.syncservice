@@ -1,5 +1,4 @@
-﻿using Grpc.Core;
-using Newtonsoft.Json;
+﻿using Newtonsoft.Json;
 using NINA.Core.Locale;
 using NINA.Core.Model;
 using NINA.Core.Utility;
@@ -26,8 +25,8 @@ using System.Threading.Tasks;
 
 namespace SyncService.Instructions {
 
-    [ExportMetadata("Name", "Synced Dither")]
-    [ExportMetadata("Description", "An instruction to coordinate a dither between multiple instances of N.I.N.A. - each instance needs to place this trigger into its sequence.")]
+    [ExportMetadata("Name", "Synced Dither (main)")]
+    [ExportMetadata("Description", "Place on the mount/guider instance. A dither moves the shared mount, so it is a mount operation: after the configured number of exposures it waits for any autofocus to finish, pauses every other instance until they have all arrived at their Synced Mount Check, performs one real dither, then releases them. Other instances do NOT need this - their Synced Mount Check holds them during the dither.")]
     [ExportMetadata("Icon", "SyncDitherSVG")]
     [ExportMetadata("Category", "SyncService")]
     [Export(typeof(ISequenceTrigger))]
@@ -109,7 +108,7 @@ namespace SyncService.Instructions {
 
         public override void Initialize() {
             try {
-                client.RegisterSync(SyncSources.Dither);
+                client.RegisterSync(SyncSources.MountOp);
             } catch (Exception ex) {
                 Logger.Error(ex);
             }
@@ -117,7 +116,7 @@ namespace SyncService.Instructions {
 
         public override void Teardown() {
             try {
-                client.UnregisterSync(SyncSources.Dither);
+                client.UnregisterSync(SyncSources.MountOp);
             } catch (Exception ex) {
                 Logger.Error(ex);
             }
@@ -130,79 +129,29 @@ namespace SyncService.Instructions {
         }
 
         public override async Task Execute(ISequenceContainer context, IProgress<ApplicationStatus> progress, CancellationToken token) {
-            var source = SyncSources.Dither;
-            var announced = false;
-            var syncCompleted = false;
+            // Only the guiding (mount) instance performs the dither; every other instance holds via its
+            // Synced Mount Check. A dither moves the shared mount, so it is just another planned mount operation.
+            if (guiderMediator.GetInfo()?.Connected != true) { return; }
+            if (AfterExposures <= 0) { return; }
 
-            try {
-                if (AfterExposures > 0) {
-                    var waitTimeout = TimeSpan.FromSeconds(pluginSettings.GetValueInt32(nameof(SyncServicePlugin.DitherWaitTimeout), 300));
-                    lastTriggerId = history.ImageHistory.Count;
-                    Logger.Info("Waiting for synchronization");
-                    progress?.Report(new ApplicationStatus() { Status = "Waiting for synchronization" });
-                    var info = guiderMediator.GetInfo();
-                    announced = true;
-                    await client.AnnounceToSync(source, info.Connected, token);
-                    var isLeader = await client.WaitForSyncStart(source, token, waitTimeout);
+            lastTriggerId = history.ImageHistory.Count;
 
-                    Logger.Info("All Synchronized");
-                    progress?.Report(new ApplicationStatus() { Status = "All Synchronized" });
-                    if (isLeader) {
-                        try {
-                            Logger.Info("This instance leads the dither");
-                            await client.SetSyncInProgress(source, token);
-                            progress?.Report(new ApplicationStatus() { Status = "This instance leads the dither" });
-                            await TriggerRunner.Run(progress, token);
-                            Logger.Info("Marking dither as complete");
-                            await client.SetSyncComplete(source, token);
-                            syncCompleted = true;
-                        } catch (RpcException e) {
-                            if (e.StatusCode == StatusCode.Cancelled) {
-                                Logger.Info("The dither was cancelled - marking dither as complete");
-                                await client.SetSyncComplete(source, CancellationToken.None);
-                                syncCompleted = true;
-                                throw new OperationCanceledException("The synchronized dither was cancelled", e, token);
-                            }
+            var rendezvous = TimeSpan.FromSeconds(pluginSettings.GetValueInt32(nameof(SyncServicePlugin.RendezvousTimeout), 600));
+            var afTimeout = TimeSpan.FromSeconds(pluginSettings.GetValueInt32(nameof(SyncServicePlugin.AutofocusBusyWaitTimeout), 300));
 
-                            throw;
-                        } catch (OperationCanceledException) {
-                            Logger.Info("The dither was cancelled - marking dither as complete");
-                            await client.SetSyncComplete(source, CancellationToken.None);
-                            syncCompleted = true;
-                            throw;
-                        }
-
-                        progress?.Report(new ApplicationStatus() { Status = "Dither is complete" });
-                    } else {
-                        Logger.Info("Waiting for leader to dither");
-                        progress?.Report(new ApplicationStatus() { Status = "Waiting for leader to dither" });
-                        await client.WaitForSyncComplete(source, token, waitTimeout);
-                        syncCompleted = true;
-                    }
-                } else {
-                    return;
-                }
-            } catch (RpcException e) when (e.StatusCode == StatusCode.Cancelled) {
-                Logger.Info("The dither was cancelled");
-                throw new OperationCanceledException("The synchronized dither was cancelled", e, token);
-            } catch (OperationCanceledException) {
-                Logger.Info("The dither was cancelled");
-                throw;
-            } finally {
-                if (announced && !syncCompleted) {
-                    try {
-                        await client.WithdrawFromSync(source, CancellationToken.None);
-                    } catch (Exception ex) {
-                        Logger.Error("Failed to withdraw from synchronized dither", ex);
-                    }
-                }
-                progress?.Report(new ApplicationStatus() { Status = "" });
-            }
+            await SyncBarrier.RunMountOperation(client, "Dither", preemptAutofocus: false, rendezvous, afTimeout, async () => {
+                progress?.Report(new ApplicationStatus() { Status = "Dithering" });
+                await TriggerRunner.Run(progress, token);
+            }, progress, token);
         }
 
         public override bool ShouldTrigger(ISequenceItem previousItem, ISequenceItem nextItem) {
             if (previousItem == null && nextItem == null) { return false; }
             if (AfterExposures <= 0) { return false; }
+            // Only the guiding (mount) instance dithers; the others hold via their Synced Mount Check.
+            if (guiderMediator.GetInfo()?.Connected != true) { return false; }
+            // Don't stack a dither on top of another in-flight mount operation (flip / recenter).
+            if (client.IsOperationPendingCached(SyncSources.MountOp)) { return false; }
             RaisePropertyChanged(nameof(ProgressExposures));
             if (lastTriggerId > history.ImageHistory.Count) {
                 // The image history was most likely cleared

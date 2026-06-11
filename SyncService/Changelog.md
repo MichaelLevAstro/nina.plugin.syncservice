@@ -1,5 +1,20 @@
 ﻿# Changelog
 
+## Version 1.5.0.0
+- New 'Start Sync Service' / 'Stop Sync Service' instructions, plus Start/Stop buttons in the plugin options, to turn the whole synchronization service on and off
+- Start/Stop is fleet-wide: starting or stopping on any one instance propagates to every instance sharing the server
+- Breaking: the service now starts STOPPED. On N.I.N.A. launch nothing runs - no status spinner, no mount watching - until you start it (a 'Start Sync Service' instruction or the options button). While stopped every Synced instruction passes through and performs its own action (slew/center, dither, flip, recenter, autofocus, begin imaging) without holding the other instances. Add a 'Start Sync Service' at the start of your sequence, or click Start in the options, to restore the previous coordinated behaviour
+
+## Version 1.4.0.0
+- Reworked around a single clear authority model: the mount instance is the ONLY initiator of mount motion, and every other instance just holds. Every planned mount operation - dither, meridian flip, center after drift - now runs through one shared rendezvous, so the instances can no longer deadlock waiting on each other
+- Fixed the stuck case where a 'Synced Center after Drift' (or 'Synced Meridian Flip') on the mount instance and a 'Synced Dither' on another instance could land on the same exposure and hang both until a timeout fired
+- 'Synced Dither' is now a mount-instance instruction (it dithers the shared mount once); other instances hold during the dither through their existing 'Synced Mount Check' and no longer place a Synced Dither of their own
+- Instruction names now carry a placement suffix: (main) = place on the mount instance, (aux) = place on every other instance, no suffix = place on every instance
+- 'Synced Mount Check (aux)' now holds for any mount operation (dither / flip / recenter) and shows which one it is waiting for
+- 'Synced Dither' now waits for any in-progress autofocus before dithering, and the dither no longer trips the unexpected-move safety net
+- The separate "SyncService Max. Wait Timeout" setting was removed; the single "Flip / Drift Rendezvous Timeout" now covers dithers too
+- Breaking: remove 'Synced Dither' from every non-mount instance (keep one 'Synced Dither (main)' on the mount/guider instance). See the README "Migration" section
+
 ## Version 1.3.3.0
 - 'Synced Begin Imaging' now auto-detects whether the instance is connected to the mount: the mount instance releases the others, every other instance waits here - so the single instruction goes on every instance at its ready-to-image point
 - Removed 'Synced Start Imaging' - place 'Synced Begin Imaging' on every instance instead. This fixes the mount instance getting stuck "waiting for the mount instance to begin imaging" when 'Synced Start Imaging' was placed on it by mistake

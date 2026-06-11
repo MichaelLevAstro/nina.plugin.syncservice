@@ -19,6 +19,8 @@ service SyncBus {
 	rpc SetFlag (FlagRequest) returns (google.protobuf.Empty);
 	rpc ClearFlag (FlagRequest) returns (google.protobuf.Empty);
 	rpc GetFlags (google.protobuf.Empty) returns (FlagsReply);
+	rpc SetServiceState (ServiceStateRequest) returns (google.protobuf.Empty);
+	rpc GetServiceState (google.protobuf.Empty) returns (BooleanReply);
 }
 
 message ClientIdRequest {
@@ -62,4 +64,11 @@ message FlagSnapshot {
 
 message FlagsReply {
 	repeated FlagSnapshot flags = 1;
+}
+
+// Fleet-wide on/off for the whole synchronization service. Held on the server so a start/stop on any
+// instance is seen by every instance (polled via GetServiceState).
+message ServiceStateRequest {
+	bool active = 1;
+	string clientid = 2;
 }

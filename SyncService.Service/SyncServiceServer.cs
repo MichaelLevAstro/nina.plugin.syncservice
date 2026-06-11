@@ -62,6 +62,11 @@ namespace SyncService.Service {
 
         private Dictionary<string, string> statusBySource = new Dictionary<string, string>();
 
+        // Fleet-wide on/off. Default stopped: nothing syncs until a client starts the service. Read directly
+        // (in-process) by the host's status spinner and polled by every instance via GetServiceState.
+        private volatile bool serviceActive = false;
+        public bool ServiceActive => serviceActive;
+
 
         private Dictionary<string, SortedDictionary<string, ClientSource>> registeredClients { get; }
         private Dictionary<string, SortedDictionary<string, bool>> clientsWaitingForSync { get; }
@@ -81,9 +86,9 @@ namespace SyncService.Service {
         /// </summary>
         public Dictionary<string, TimeSpan> DefaultFlagTtl { get; } = new Dictionary<string, TimeSpan>() {
             ["MountBusy"] = TimeSpan.FromSeconds(15),
-            ["MeridianFlip.Pending"] = TimeSpan.FromSeconds(20),
-            ["CenterAfterDrift.Pending"] = TimeSpan.FromSeconds(20),
+            ["MountOp.Pending"] = TimeSpan.FromSeconds(20),
             ["Autofocus.Busy"] = TimeSpan.FromSeconds(20),
+            ["Autofocus.Preempt"] = TimeSpan.FromSeconds(20),
         };
 
         /// <summary>Back-compat accessor for the mount-busy ttl (now just the "MountBusy" key default).</summary>
@@ -530,6 +535,26 @@ namespace SyncService.Service {
                 }
                 return Task.FromResult(reply);
             }
+        }
+
+        public override Task<Empty> SetServiceState(ServiceStateRequest request, ServerCallContext context) {
+            if (serviceActive != request.Active) {
+                serviceActive = request.Active;
+                Logger.Info($"Sync service {(request.Active ? "started" : "stopped")} by client {request.Clientid}");
+            }
+            if (!request.Active) {
+                // Stopping releases the fleet: drop every push flag and per-source status so nothing holds an
+                // instance, and the next start begins from a clean slate.
+                lock (lockobj) {
+                    flagsByKey.Clear();
+                    statusBySource.Clear();
+                }
+            }
+            return Task.FromResult(new Empty());
+        }
+
+        public override Task<BooleanReply> GetServiceState(Empty request, ServerCallContext context) {
+            return Task.FromResult(new BooleanReply() { Value = serviceActive });
         }
 
         private void PurgeExpiredFlags(string key) {

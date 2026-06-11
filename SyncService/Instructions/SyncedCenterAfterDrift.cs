@@ -23,8 +23,8 @@ using System.Threading.Tasks;
 
 namespace SyncService.Instructions {
 
-    [ExportMetadata("Name", "Synced Center after Drift")]
-    [ExportMetadata("Description", "On the instance connected to the mount, measures pointing drift via plate-solving and, when it exceeds the threshold, waits for any autofocus to finish, pauses every other instance until they have all arrived at their Synced Mount Check, recenters, then releases them. Does nothing on instances without a mount - put a Synced Mount Check on those.")]
+    [ExportMetadata("Name", "Synced Center after Drift (main)")]
+    [ExportMetadata("Description", "Place on the mount instance. Measures pointing drift via plate-solving and, when it exceeds the threshold, waits for any autofocus to finish, pauses every other instance until they have all arrived at their Synced Mount Check, recenters, then releases them. Does nothing on instances without a mount - put a Synced Mount Check on those.")]
     [ExportMetadata("Icon", "SyncMountSVG")]
     [ExportMetadata("Category", "SyncService")]
     [Export(typeof(ISequenceTrigger))]
@@ -117,13 +117,13 @@ namespace SyncService.Instructions {
         }
 
         public override void Initialize() {
-            try { client.RegisterSync(SyncSources.CenterAfterDrift); } catch (Exception ex) { Logger.Error(ex); }
+            try { client.RegisterSync(SyncSources.MountOp); } catch (Exception ex) { Logger.Error(ex); }
             try { hosted.Initialize(); } catch (Exception ex) { Logger.Error(ex); }
         }
 
         public override void Teardown() {
             try { hosted.Teardown(); } catch (Exception ex) { Logger.Error(ex); }
-            try { client.UnregisterSync(SyncSources.CenterAfterDrift); } catch (Exception ex) { Logger.Error(ex); }
+            try { client.UnregisterSync(SyncSources.MountOp); } catch (Exception ex) { Logger.Error(ex); }
         }
 
         public override void SequenceBlockInitialize() => hosted.SequenceBlockInitialize();
@@ -131,40 +131,21 @@ namespace SyncService.Instructions {
 
         public override bool ShouldTrigger(ISequenceItem previousItem, ISequenceItem nextItem) {
             if (!IsThisTheMountInstance()) { return false; }
-            if (client.IsOperationPendingCached(SyncSources.MeridianFlip)) { return false; }
-            if (client.IsOperationPendingCached(SyncSources.CenterAfterDrift)) { return false; }
+            if (client.IsOperationPendingCached(SyncSources.MountOp)) { return false; }
             return hosted.ShouldTrigger(previousItem, nextItem);
         }
 
         public override async Task Execute(ISequenceContainer context, IProgress<ApplicationStatus> progress, CancellationToken token) {
             if (!IsThisTheMountInstance()) { return; }
 
-            var src = SyncSources.CenterAfterDrift;
-            var rendezvousTimeout = TimeSpan.FromSeconds(pluginSettings.GetValueInt32(nameof(SyncServicePlugin.RendezvousTimeout), 600));
+            var rendezvous = TimeSpan.FromSeconds(pluginSettings.GetValueInt32(nameof(SyncServicePlugin.RendezvousTimeout), 600));
             var afTimeout = TimeSpan.FromSeconds(pluginSettings.GetValueInt32(nameof(SyncServicePlugin.AutofocusBusyWaitTimeout), 300));
 
-            // Do not move the mount while any instance is autofocusing.
-            await SyncBarrier.WaitWhileAutofocusBusy(client, afTimeout, progress, token);
-
-            client.BeginPlannedMountOperation();
-            using var refreshCts = CancellationTokenSource.CreateLinkedTokenSource(token);
-            Task refreshTask = null;
-            try {
-                await client.SetOperationPending(src, "Center after drift", token);
-                refreshTask = SyncBarrier.RefreshLoop(ct => client.SetOperationPending(src, "Center after drift", ct), 5000, refreshCts.Token);
-
-                progress?.Report(new ApplicationStatus() { Status = "Waiting for all instances before recenter" });
-                await SyncBarrier.RunAsLeader(client, src, rendezvousTimeout, async () => {
-                    progress?.Report(new ApplicationStatus() { Status = "Recentering after drift" });
-                    await hosted.Execute(context, progress, token);
-                }, token);
-            } finally {
-                refreshCts.Cancel();
-                if (refreshTask != null) { try { await refreshTask; } catch (Exception) { } }
-                try { await client.ClearOperationPending(src, CancellationToken.None); } catch (Exception ex) { Logger.Error(ex); }
-                client.EndPlannedMountOperation();
-                progress?.Report(new ApplicationStatus() { Status = "" });
-            }
+            // Wait for any autofocus to finish before moving the mount (the reverse hold).
+            await SyncBarrier.RunMountOperation(client, "Recenter after drift", preemptAutofocus: false, rendezvous, afTimeout, async () => {
+                progress?.Report(new ApplicationStatus() { Status = "Recentering after drift" });
+                await hosted.Execute(context, progress, token);
+            }, progress, token);
         }
 
         public override string ToString() {

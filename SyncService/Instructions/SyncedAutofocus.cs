@@ -69,8 +69,8 @@ namespace SyncService.Instructions {
         }
 
         public override void Initialize() {
-            // Keep-alive registration so this instance heartbeats (and FlipPreemptCached stays fresh) even if it
-            // has no Synced Mount Check. SyncSources.Autofocus is never used in a rendezvous.
+            // Keep-alive registration so this instance heartbeats (and AutofocusPreemptCached stays fresh) even
+            // if it has no Synced Mount Check. SyncSources.Autofocus is never used in a rendezvous.
             try { client.RegisterSync(SyncSources.Autofocus); } catch (Exception ex) { Logger.Error(ex); }
             try { hosted.Initialize(); } catch (Exception ex) { Logger.Error(ex); }
         }
@@ -84,8 +84,9 @@ namespace SyncService.Instructions {
         public override void SequenceBlockTeardown() => hosted.SequenceBlockTeardown();
 
         public override bool ShouldTrigger(ISequenceItem previousItem, ISequenceItem nextItem) {
-            // Don't start an autofocus if a meridian flip is imminent - it would just be preempted.
-            if (client.IsOperationPendingCached(SyncSources.MeridianFlip)) { return false; }
+            // Don't start an autofocus while the mount instance is running a mount operation - it would either
+            // be held off (recenter / dither) or immediately preempted (meridian flip). It re-fires afterwards.
+            if (client.IsOperationPendingCached(SyncSources.MountOp)) { return false; }
             return hosted.ShouldTrigger(previousItem, nextItem);
         }
 
@@ -96,7 +97,7 @@ namespace SyncService.Instructions {
             Task refreshTask = null;
             try {
                 await client.SetAutofocusBusy("Autofocus", token);
-                watchTask = WatchForFlipPreempt(preemptCts);
+                watchTask = WatchForAutofocusPreempt(preemptCts);
                 refreshTask = SyncBarrier.RefreshLoop(ct => client.SetAutofocusBusy("Autofocus", ct), 5000, refreshCts.Token);
 
                 await hosted.Execute(context, progress, preemptCts.Token);
@@ -114,10 +115,10 @@ namespace SyncService.Instructions {
             }
         }
 
-        private async Task WatchForFlipPreempt(CancellationTokenSource preemptCts) {
+        private async Task WatchForAutofocusPreempt(CancellationTokenSource preemptCts) {
             try {
                 while (!preemptCts.IsCancellationRequested) {
-                    if (client.FlipPreemptCached) {
+                    if (client.AutofocusPreemptCached) {
                         preemptCts.Cancel();
                         break;
                     }

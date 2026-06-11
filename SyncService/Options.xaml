@@ -31,24 +31,43 @@
 
     <DataTemplate x:Key="SyncService_Options">
         <StackPanel Orientation="Vertical">
+            <TextBlock
+                Margin="0,0,0,2"
+                FontWeight="Bold"
+                Text="Sync Service" />
+
             <Grid Margin="0,2">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="260" />
                     <ColumnDefinition />
                 </Grid.ColumnDefinitions>
-                <TextBlock VerticalAlignment="Center" Text="SyncService Max. Wait Timeout" />
-                <ninactrl:UnitTextBox
+                <TextBlock VerticalAlignment="Center" Text="Service" />
+                <StackPanel
                     Grid.Column="1"
-                    MinWidth="80"
                     Margin="5,0,0,0"
-                    HorizontalAlignment="Left"
-                    VerticalAlignment="Center"
-                    Text="{Binding DitherWaitTimeout}"
-                    Unit="s" />
+                    Orientation="Horizontal">
+                    <TextBlock
+                        MinWidth="60"
+                        VerticalAlignment="Center"
+                        FontWeight="Bold"
+                        Text="{Binding ServiceStatusText}" />
+                    <Button
+                        Margin="10,0,0,0"
+                        Padding="12,3"
+                        Command="{Binding StartServiceCommand}"
+                        Content="Start"
+                        IsEnabled="{Binding CanStartService}" />
+                    <Button
+                        Margin="5,0,0,0"
+                        Padding="12,3"
+                        Command="{Binding StopServiceCommand}"
+                        Content="Stop"
+                        IsEnabled="{Binding CanStopService}" />
+                </StackPanel>
             </Grid>
 
             <TextBlock
-                Margin="0,10,0,2"
+                Margin="0,8,0,2"
                 FontWeight="Bold"
                 Text="Mount SyncService" />
 
@@ -322,6 +341,12 @@
         <nina:SequenceBlockView />
     </DataTemplate>
     <DataTemplate DataType="{x:Type instruction:SyncedBeginImaging}">
+        <nina:SequenceBlockView />
+    </DataTemplate>
+    <DataTemplate DataType="{x:Type instruction:StartSyncService}">
+        <nina:SequenceBlockView />
+    </DataTemplate>
+    <DataTemplate DataType="{x:Type instruction:StopSyncService}">
         <nina:SequenceBlockView />
     </DataTemplate>
 </ResourceDictionary>

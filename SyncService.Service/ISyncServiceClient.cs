@@ -19,6 +19,12 @@ namespace SyncService.Service {
         Task WithdrawFromSync(string source, CancellationToken ct);
         Task<string> Ping(CancellationToken ct);
 
+        // Fleet-wide service on/off. ServiceActiveCached is kept fresh by the plugin's state watcher; the sync
+        // primitives read it so that while stopped every instruction passes through without coordinating.
+        bool ServiceActiveCached { get; }
+        Task SetServiceState(bool active, CancellationToken ct);
+        Task<bool> RefreshServiceState(CancellationToken ct);
+
         // Generic keyed flags (heartbeat-cached for synchronous reads in ShouldTrigger).
         Task SetFlag(string key, string reason, TimeSpan ttl, CancellationToken ct);
         Task ClearFlag(string key, CancellationToken ct);
@@ -28,18 +34,22 @@ namespace SyncService.Service {
         Task SetMountBusy(string reason, CancellationToken ct);
         Task ClearMountBusy(CancellationToken ct);
 
-        // Operation pending (rendezvous wake-up for meridian flip / center-after-drift).
+        // Operation pending (rendezvous wake-up). Every planned mount operation uses the single
+        // SyncSources.MountOp source; the reason carries the human-readable kind for the status line.
         bool IsOperationPendingCached(string source);
+        string MountOpReason { get; }
         Task SetOperationPending(string source, string reason, CancellationToken ct);
         Task ClearOperationPending(string source, CancellationToken ct);
 
-        // The meridian-flip pending flag doubles as the "preempt autofocus" signal.
-        bool FlipPreemptCached { get; }
-
-        // Autofocus busy (reverse hold - blocks the main's mount moves).
+        // Autofocus busy (reverse hold - blocks the main's mount moves while any instance focuses).
         bool AutofocusBusyCached { get; }
         Task SetAutofocusBusy(string reason, CancellationToken ct);
         Task ClearAutofocusBusy(CancellationToken ct);
+
+        // Autofocus preempt - set ONLY by the time-critical meridian flip to cancel in-flight autofocus.
+        bool AutofocusPreemptCached { get; }
+        Task SetAutofocusPreempt(string reason, CancellationToken ct);
+        Task ClearAutofocusPreempt(CancellationToken ct);
 
         // Process-local gate so the reactive observer only reacts to UNEXPECTED moves.
         bool PlannedMountOperationInProgress { get; }

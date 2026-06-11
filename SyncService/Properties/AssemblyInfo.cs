@@ -35,7 +35,7 @@ using System.Runtime.Versioning;
 //
 // You can specify all the values or you can default the Build and Revision Numbers
 // by using the '*' as shown below:
-// [assembly: AssemblyVersion("1.3.2.0")]
+// [assembly: AssemblyVersion("1.3.3.0")]
 [assembly: AssemblyVersion("1.3.3.0")]
 [assembly: AssemblyFileVersion("1.3.3.0")]
 
@@ -62,30 +62,29 @@ using System.Runtime.Versioning;
 [assembly: AssemblyMetadata("ScreenshotURL", "https://github.com/MichaelLevAstro/nina.plugin.syncservice/blob/master/SyncService/SynchronizationSample.jpg?raw=true")]
 //An additional example screenshot of your plugin in action
 [assembly: AssemblyMetadata("AltScreenshotURL", "")]
-[assembly: AssemblyMetadata("LongDescription", @"This plugin is intended for people that want to dither on a setup with multiple cameras on one single mount. 
-For that it has to be ensured that all imaging instances will sync up on each other before commencing a dither operation.  
-  
-*Note:* The plugin needs robust testing in live conditions. Feedback for failure scenarios are appreciated in the #plugin-discusissions N.I.N.A. discord channel. Thanks!
+[assembly: AssemblyMetadata("LongDescription", @"Coordinates multiple cameras running separate N.I.N.A. instances on one shared mount so they don't ruin each other's frames.
+
+*One simple rule:* only the mount instance ever moves the mount; every other instance just holds while it does. Because the mount instance is the single initiator, the instances can never deadlock waiting on each other.
+
+*Naming:* instruction names carry a placement suffix - **(main)** = place on the mount instance, **(aux)** = place on every other instance, no suffix = place on every instance.
 
 *Prerequisites*:
-* At least one instance of N.I.N.A. needs to be connected to the guider
-* Only one instance should handle and be connected to the mount
+* Only one instance connected to the mount.
+* For dithering, that mount instance is also connected to the guider.
+* The first N.I.N.A. instance to start hosts the coordination server and must stay running for the whole session.
 
-*Usage*:
-* The first instance of N.I.N.A. that starts will register a server that orchestrates the dither workflow. This instance must remain active for the complete duration of your imaging acquisition.  
-* To make use of the synchronized dithering a new instruction trigger is available for advanced sequences  
-* Simply replace your normal dither trigger with the 'Synced Dither' trigger  
-* Each trigger will register itself against the server when the instruction set where the trigger is placed in is active and unregister itself automatically when the instruction set is left  
-* Make sure that your **exposure time * dither after exposures** roughly matches for each instance, as every time the trigger is fired the trigger will wait for all instances to be synced up  
-* When the triggers are synced up, one instance will be picked as the leader, among those that are connected to a guider, that will run the dither command. The others will wait for the dither to finish and then continue with the sequence
+*Place on the mount instance (main)*:
+* 'Synced Meridian Flip (main)' - interrupts the others' autofocus, waits for them to stop, runs the full flip, then releases them.
+* 'Synced Center after Drift (main)' - on measured drift, waits for autofocus and for the others, recenters, then releases them.
+* 'Synced Dither (main)' - dithers the shared mount once after N exposures, pausing the others while it does.
+* 'Synced Slew and Center (main)' - slews and centers while the others are held until the mount settles.
 
-*Synchronized mount operations*:
-Multiple cameras sharing one mount must also stop imaging while the mount moves. Place a 'Synced Mount Check' around the exposures on every instance that does NOT own the mount, then on the mount instance use:
+*Place on every other instance (aux)*:
+* 'Synced Mount Check (aux)' - holds this instance whenever the mount instance runs ANY mount operation, and as a safety net for unexpected moves.
 
-* 'Synced Meridian Flip' - the flip runs only after all other instances have paused at their check, then they resume.
-* 'Synced Center after Drift' - waits for the other instances before recentering.
-* 'Synced Center and Slew' - the other instances are held until the slew/center settles.
-* 'Synced Autofocus' (after exposures / time / HFR increase / temperature / filter change) - any instance focuses on its own and holds the mount from slewing while it does; a due meridian flip interrupts the autofocus and re-runs it afterwards.
+*Place on every instance*:
+* 'Synced Begin Imaging' - all instances start imaging together once the mount instance is on target.
+* 'Synced Autofocus' (after exposures / time / HFR increase / temperature / filter change) - each instance focuses on its own and blocks the mount instance from moving while it does; a due meridian flip interrupts it and it re-runs afterwards.
 
 A safety net also pauses the other instances if the mount moves unexpectedly (a manual slew, another plugin, ...); this can be tuned or toggled in the plugin options.
 

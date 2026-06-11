@@ -21,8 +21,8 @@ using System.Threading.Tasks;
 
 namespace SyncService.Instructions {
 
-    [ExportMetadata("Name", "Synced Meridian Flip")]
-    [ExportMetadata("Description", "On the instance connected to the mount, when a meridian flip is due it pauses every other N.I.N.A. instance (interrupting their autofocus), waits until they have all arrived at their Synced Mount Check, runs the full N.I.N.A. flip (stop guiding, flip, recenter, resume guiding, optional autofocus, settle), then releases them. Does nothing on instances without a mount - put a Synced Mount Check on those.")]
+    [ExportMetadata("Name", "Synced Meridian Flip (main)")]
+    [ExportMetadata("Description", "Place on the mount instance. When a meridian flip is due it pauses every other N.I.N.A. instance (interrupting their autofocus), waits until they have all arrived at their Synced Mount Check, runs the full N.I.N.A. flip (stop guiding, flip, recenter, resume guiding, optional autofocus, settle), then releases them. Does nothing on instances without a mount - put a Synced Mount Check on those.")]
     [ExportMetadata("Icon", "SyncMountSVG")]
     [ExportMetadata("Category", "SyncService")]
     [Export(typeof(ISequenceTrigger))]
@@ -75,13 +75,13 @@ namespace SyncService.Instructions {
         }
 
         public override void Initialize() {
-            try { client.RegisterSync(SyncSources.MeridianFlip); } catch (Exception ex) { Logger.Error(ex); }
+            try { client.RegisterSync(SyncSources.MountOp); } catch (Exception ex) { Logger.Error(ex); }
             try { hosted.Initialize(); } catch (Exception ex) { Logger.Error(ex); }
         }
 
         public override void Teardown() {
             try { hosted.Teardown(); } catch (Exception ex) { Logger.Error(ex); }
-            try { client.UnregisterSync(SyncSources.MeridianFlip); } catch (Exception ex) { Logger.Error(ex); }
+            try { client.UnregisterSync(SyncSources.MountOp); } catch (Exception ex) { Logger.Error(ex); }
         }
 
         public override void SequenceBlockInitialize() => hosted.SequenceBlockInitialize();
@@ -89,45 +89,29 @@ namespace SyncService.Instructions {
 
         public override bool ShouldTrigger(ISequenceItem previousItem, ISequenceItem nextItem) {
             if (!IsThisTheMountInstance()) { return false; }
-            if (client.IsOperationPendingCached(SyncSources.MeridianFlip)) { return false; }
+            if (client.IsOperationPendingCached(SyncSources.MountOp)) { return false; }
             return hosted.ShouldTrigger(previousItem, nextItem);
         }
 
         public override async Task Execute(ISequenceContainer context, IProgress<ApplicationStatus> progress, CancellationToken token) {
             if (!IsThisTheMountInstance()) { return; }
 
-            var src = SyncSources.MeridianFlip;
-            var timeout = TimeSpan.FromSeconds(pluginSettings.GetValueInt32(nameof(SyncServicePlugin.RendezvousTimeout), 600));
+            var rendezvous = TimeSpan.FromSeconds(pluginSettings.GetValueInt32(nameof(SyncServicePlugin.RendezvousTimeout), 600));
+            var settle = pluginSettings.GetValueInt32(nameof(SyncServicePlugin.PostFlipSettleTime), 30);
 
-            client.BeginPlannedMountOperation();
-            using var refreshCts = CancellationTokenSource.CreateLinkedTokenSource(token);
-            Task refreshTask = null;
-            try {
-                // Raise the pending flag first - it wakes the aux checks AND preempts any aux autofocus.
-                await client.SetOperationPending(src, "Meridian flip", token);
-                refreshTask = SyncBarrier.RefreshLoop(ct => client.SetOperationPending(src, "Meridian flip", ct), 5000, refreshCts.Token);
+            // A meridian flip is time-critical, so it PREEMPTS autofocus rather than waiting for it.
+            await SyncBarrier.RunMountOperation(client, "Meridian flip", preemptAutofocus: true, rendezvous, TimeSpan.Zero, async () => {
+                progress?.Report(new ApplicationStatus() { Status = "Performing meridian flip" });
+                await hosted.Execute(context, progress, token);
 
-                progress?.Report(new ApplicationStatus() { Status = "Waiting for all instances before meridian flip" });
-                await SyncBarrier.RunAsLeader(client, src, timeout, async () => {
-                    progress?.Report(new ApplicationStatus() { Status = "Performing meridian flip" });
-                    await hosted.Execute(context, progress, token);
-
-                    // Hold the other instances a bit longer so the guider has resumed and settled before they
-                    // resume imaging - the flip routine can return while the guider is still recovering.
-                    var settle = pluginSettings.GetValueInt32(nameof(SyncServicePlugin.PostFlipSettleTime), 30);
-                    if (settle > 0) {
-                        Logger.Info($"Meridian flip complete - holding {settle}s for the guider to settle before releasing the other instances");
-                        progress?.Report(new ApplicationStatus() { Status = $"Waiting {settle}s for the guider to settle after the flip" });
-                        await Task.Delay(TimeSpan.FromSeconds(settle), token);
-                    }
-                }, token);
-            } finally {
-                refreshCts.Cancel();
-                if (refreshTask != null) { try { await refreshTask; } catch (Exception) { } }
-                try { await client.ClearOperationPending(src, CancellationToken.None); } catch (Exception ex) { Logger.Error(ex); }
-                client.EndPlannedMountOperation();
-                progress?.Report(new ApplicationStatus() { Status = "" });
-            }
+                // Hold the other instances a bit longer so the guider has resumed and settled before they
+                // resume imaging - the flip routine can return while the guider is still recovering.
+                if (settle > 0) {
+                    Logger.Info($"Meridian flip complete - holding {settle}s for the guider to settle before releasing the other instances");
+                    progress?.Report(new ApplicationStatus() { Status = $"Waiting {settle}s for the guider to settle after the flip" });
+                    await Task.Delay(TimeSpan.FromSeconds(settle), token);
+                }
+            }, progress, token);
         }
 
         public override string ToString() {

@@ -31,11 +31,19 @@ namespace SyncService.Service {
         private volatile bool autofocusBusyCached = false;
         public bool AutofocusBusyCached => autofocusBusyCached;
 
+        private volatile bool autofocusPreemptCached = false;
+        public bool AutofocusPreemptCached => autofocusPreemptCached;
+
+        // Fleet-wide service on/off, kept fresh by the plugin's state watcher. Read synchronously by the sync
+        // primitives so that while the service is stopped every instruction passes through uncoordinated.
+        private volatile bool serviceActiveCached = false;
+        public bool ServiceActiveCached => serviceActiveCached;
+
         private readonly ConcurrentDictionary<string, bool> pendingBySource = new ConcurrentDictionary<string, bool>();
         public bool IsOperationPendingCached(string source) => pendingBySource.TryGetValue(source, out var v) && v;
 
-        /// <summary>The meridian-flip pending flag doubles as the "preempt autofocus" signal.</summary>
-        public bool FlipPreemptCached => IsOperationPendingCached(SyncSources.MeridianFlip);
+        /// <summary>Human-readable kind of the planned mount operation the main is running (for the aux status line).</summary>
+        public string MountOpReason { get; private set; } = string.Empty;
 
         // Process-local gate: while a planned mount operation runs on this instance, the reactive observer
         // suppresses its own mount-busy reporting so it only reacts to UNEXPECTED moves.
@@ -142,8 +150,22 @@ namespace SyncService.Service {
             await base.WithdrawFromSyncAsync(new ClientIdRequest() { Clientid = id.ToString(), Source = source }, null, deadline: DateTime.UtcNow.AddSeconds(5), cancellationToken: ct);
         }
 
+        // ---- fleet-wide service state ----
+        public async Task SetServiceState(bool active, CancellationToken ct) {
+            await base.SetServiceStateAsync(new ServiceStateRequest() { Active = active, Clientid = id.ToString() }, null, deadline: DateTime.UtcNow.AddSeconds(5), cancellationToken: ct);
+            serviceActiveCached = active;
+        }
+
+        public async Task<bool> RefreshServiceState(CancellationToken ct) {
+            var reply = await base.GetServiceStateAsync(new Empty(), null, deadline: DateTime.UtcNow.AddSeconds(5), cancellationToken: ct);
+            serviceActiveCached = reply.Value;
+            return reply.Value;
+        }
+
         // ---- generic keyed flags ----
         public async Task SetFlag(string key, string reason, TimeSpan ttl, CancellationToken ct) {
+            // While the service is stopped no push state is broadcast - every instruction runs uncoordinated.
+            if (!serviceActiveCached) { return; }
             await base.SetFlagAsync(new FlagRequest() {
                 Key = key,
                 Clientid = id.ToString(),
@@ -172,10 +194,16 @@ namespace SyncService.Service {
         public Task SetAutofocusBusy(string reason, CancellationToken ct) => SetFlag(SyncSources.AutofocusBusy, reason, TimeSpan.Zero, ct);
         public Task ClearAutofocusBusy(CancellationToken ct) => ClearFlag(SyncSources.AutofocusBusy, ct);
 
+        // ---- autofocus preempt (meridian flip cancels in-flight autofocus) ----
+        public Task SetAutofocusPreempt(string reason, CancellationToken ct) => SetFlag(SyncSources.AutofocusPreempt, reason, TimeSpan.Zero, ct);
+        public Task ClearAutofocusPreempt(CancellationToken ct) => ClearFlag(SyncSources.AutofocusPreempt, ct);
+
         private void UpdateFlagCaches(FlagsReply flags) {
             var mount = false;
             var af = false;
+            var afPreempt = false;
             var mountReason = string.Empty;
+            var mountOpReason = string.Empty;
             var seenPending = new HashSet<string>();
             foreach (var f in flags.Flags) {
                 if (!f.Set) { continue; }
@@ -184,10 +212,13 @@ namespace SyncService.Service {
                     mountReason = f.Reason;
                 } else if (f.Key == SyncSources.AutofocusBusy) {
                     af = true;
+                } else if (f.Key == SyncSources.AutofocusPreempt) {
+                    afPreempt = true;
                 } else if (f.Key.EndsWith(SyncSources.PendingSuffix)) {
                     var src = f.Key.Substring(0, f.Key.Length - SyncSources.PendingSuffix.Length);
                     pendingBySource[src] = true;
                     seenPending.Add(src);
+                    if (src == SyncSources.MountOp) { mountOpReason = f.Reason; }
                 }
             }
             foreach (var src in pendingBySource.Keys.ToList()) {
@@ -195,13 +226,17 @@ namespace SyncService.Service {
             }
             mountBusyCached = mount;
             MountBusyReason = mountReason ?? string.Empty;
+            MountOpReason = mountOpReason ?? string.Empty;
             autofocusBusyCached = af;
+            autofocusPreemptCached = afPreempt;
         }
 
         private void ClearAllFlagCaches() {
             mountBusyCached = false;
             autofocusBusyCached = false;
+            autofocusPreemptCached = false;
             MountBusyReason = string.Empty;
+            MountOpReason = string.Empty;
             foreach (var src in pendingBySource.Keys.ToList()) { pendingBySource[src] = false; }
         }
 

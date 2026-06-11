@@ -1,3 +1,4 @@
+using Google.Protobuf.WellKnownTypes;
 using NINA.SyncService.Service.Sync;
 using NUnit.Framework;
 using SyncService.Service;
@@ -214,6 +215,64 @@ namespace NINA.Plugins.Test {
                 await server.Unregister(Client(leaderClient, source), Context);
                 await server.Unregister(Client(followerClient, source), Context);
             }
+        }
+
+        [Test]
+        public async Task MountOp_SerializesDistinctOperationsOnOneSource_FollowerReleasedEachTime() {
+            // The authority-model redesign routes EVERY planned mount operation (dither / meridian flip /
+            // center after drift) through the single MountOp rendezvous: the mount instance leads, every other
+            // instance follows via its Synced Mount Check. This proves back-to-back DISTINCT operations both
+            // complete on one source with one leader + one follower - i.e. collapsing the old per-operation
+            // sources is sound and a single follower hold covers any operation kind. A regression here would
+            // mean the sources were re-split (reintroducing the cross-operation deadlock) or the follower is
+            // no longer released between operations.
+            var server = SyncServiceServer.Instance;
+            var source = $"{SyncSources.MountOp}-{UniqueSource()}";
+            var main = "00000000-0000-0000-0000-0000000000aa"; // mount instance (leader)
+            var aux = "ffffffff-ffff-ffff-ffff-ffffffffffaa";  // aux instance (follower)
+
+            await server.Register(Client(main, source), Context);
+            await server.Register(Client(aux, source), Context);
+
+            try {
+                foreach (var op in new[] { "Meridian flip", "Dither" }) {
+                    await server.AnnounceToSync(Announcement(aux, source, canLead: false), Context);
+                    await server.AnnounceToSync(Announcement(main, source, canLead: true), Context);
+
+                    var leader = await AssertCompletes(
+                        server.WaitForSyncStart(Client(main, source), Context),
+                        $"Mount instance was not elected leader for {op}.");
+                    Assert.That(leader.LeaderId, Is.EqualTo(main), $"Only the mount instance should lead {op}.");
+
+                    await server.SetSyncInProgress(Client(main, source), Context);
+                    await server.SetSyncCompleted(Client(main, source), Context);
+
+                    var follower = await AssertCompletes(
+                        server.WaitForSyncStart(Client(aux, source), Context),
+                        $"Follower was not released at start for {op}.");
+                    Assert.That(follower.LeaderId, Is.EqualTo(main));
+
+                    await AssertCompletes(
+                        server.WaitForSyncCompleted(Client(aux, source), Context),
+                        $"Follower was not released at completion for {op}.");
+                }
+            } finally {
+                await server.Unregister(Client(main, source), Context);
+                await server.Unregister(Client(aux, source), Context);
+            }
+        }
+
+        [Test]
+        public async Task SetServiceState_TogglesGetServiceState() {
+            var server = SyncServiceServer.Instance;
+
+            await server.SetServiceState(new ServiceStateRequest { Active = true, Clientid = "test" }, Context);
+            Assert.That((await server.GetServiceState(new Empty(), Context)).Value, Is.True);
+            Assert.That(server.ServiceActive, Is.True);
+
+            await server.SetServiceState(new ServiceStateRequest { Active = false, Clientid = "test" }, Context);
+            Assert.That((await server.GetServiceState(new Empty(), Context)).Value, Is.False);
+            Assert.That(server.ServiceActive, Is.False);
         }
 
         private static string UniqueSource() {

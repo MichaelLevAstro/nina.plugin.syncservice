@@ -18,8 +18,8 @@ using System.Threading.Tasks;
 
 namespace SyncService.Instructions {
 
-    [ExportMetadata("Name", "Synced Mount Check")]
-    [ExportMetadata("Description", "Place this once around the exposures on every instance that does NOT own the mount. When the mount instance runs a Synced Meridian Flip or Synced Center after Drift it joins the rendezvous and holds until that finishes; it also holds (as a safety net) whenever the mount moves unexpectedly. The in-flight exposure finishes first. Does nothing on the instance connected to the mount.")]
+    [ExportMetadata("Name", "Synced Mount Check (aux)")]
+    [ExportMetadata("Description", "Place this once around the exposures on every instance that does NOT own the mount. It holds this instance whenever the mount instance runs ANY mount operation - dither, meridian flip or center after drift - and, as a safety net, whenever the mount moves unexpectedly. The in-flight exposure finishes first. Does nothing on the instance connected to the mount.")]
     [ExportMetadata("Icon", "SyncMountSVG")]
     [ExportMetadata("Category", "SyncService")]
     [Export(typeof(ISequenceTrigger))]
@@ -63,16 +63,12 @@ namespace SyncService.Instructions {
         }
 
         public override void Initialize() {
-            // Register for both rendezvous sources so the mount instance's WaitForSyncStart counts this aux.
-            TryRegister(SyncSources.MeridianFlip);
-            TryRegister(SyncSources.CenterAfterDrift);
-            TryRegister(SyncSources.MountGuard);
+            // Register for the single mount-operation rendezvous so the mount instance's WaitForSyncStart counts this aux.
+            TryRegister(SyncSources.MountOp);
         }
 
         public override void Teardown() {
-            TryUnregister(SyncSources.MeridianFlip);
-            TryUnregister(SyncSources.CenterAfterDrift);
-            TryUnregister(SyncSources.MountGuard);
+            TryUnregister(SyncSources.MountOp);
         }
 
         private void TryRegister(string source) {
@@ -85,41 +81,32 @@ namespace SyncService.Instructions {
 
         public override bool ShouldTrigger(ISequenceItem previousItem, ISequenceItem nextItem) {
             if (!Enabled) { return false; }
+            if (!client.ServiceActiveCached) { return false; }
             if (IsThisTheMountInstance()) { return false; }
-            return client.IsOperationPendingCached(SyncSources.MeridianFlip)
-                || client.IsOperationPendingCached(SyncSources.CenterAfterDrift)
+            return client.IsOperationPendingCached(SyncSources.MountOp)
                 || client.MountBusyCached;
         }
 
         public override async Task Execute(ISequenceContainer context, IProgress<ApplicationStatus> progress, CancellationToken token) {
             if (IsThisTheMountInstance()) { return; }
 
-            // Flip takes precedence over drift if both are somehow pending.
-            if (client.IsOperationPendingCached(SyncSources.MeridianFlip)) {
+            // One rendezvous for every planned mount operation (dither / flip / center after drift). The kind
+            // is carried in the pending reason purely for the status line.
+            if (client.IsOperationPendingCached(SyncSources.MountOp)) {
                 var timeout = TimeSpan.FromSeconds(pluginSettings.GetValueInt32(nameof(SyncServicePlugin.RendezvousTimeout), 600));
-                Logger.Info("Holding for a synchronized meridian flip on the mount instance");
-                progress?.Report(new ApplicationStatus() { Status = "Holding for meridian flip" });
+                var reason = client.MountOpReason;
+                var status = string.IsNullOrWhiteSpace(reason) ? "Holding for the mount instance" : $"Holding for {reason.ToLowerInvariant()}";
+                Logger.Info($"Holding for a synced mount operation on the mount instance ({(string.IsNullOrWhiteSpace(reason) ? "mount operation" : reason)})");
+                progress?.Report(new ApplicationStatus() { Status = status });
                 try {
-                    await SyncBarrier.RunAsFollower(client, SyncSources.MeridianFlip, timeout, token);
+                    await SyncBarrier.RunAsFollower(client, SyncSources.MountOp, timeout, token);
                 } finally {
                     progress?.Report(new ApplicationStatus() { Status = "" });
                 }
                 return;
             }
 
-            if (client.IsOperationPendingCached(SyncSources.CenterAfterDrift)) {
-                var timeout = TimeSpan.FromSeconds(pluginSettings.GetValueInt32(nameof(SyncServicePlugin.RendezvousTimeout), 600));
-                Logger.Info("Holding for a synchronized recenter on the mount instance");
-                progress?.Report(new ApplicationStatus() { Status = "Holding for recenter" });
-                try {
-                    await SyncBarrier.RunAsFollower(client, SyncSources.CenterAfterDrift, timeout, token);
-                } finally {
-                    progress?.Report(new ApplicationStatus() { Status = "" });
-                }
-                return;
-            }
-
-            // Reactive branch: the mount moved (planned Center&Slew or an unexpected move). Hold until idle.
+            // Reactive branch: the mount moved (flag-based Slew and Center or an unexpected move). Hold until idle.
             var holdTimeout = TimeSpan.FromSeconds(pluginSettings.GetValueInt32(nameof(SyncServicePlugin.MountWaitTimeout), 600));
             var deadline = DateTime.UtcNow + holdTimeout;
             Logger.Info("Mount is moving - holding imaging until it settles");

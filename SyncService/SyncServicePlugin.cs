@@ -19,6 +19,7 @@ using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Windows.Input;
 
 namespace SyncService {
 
@@ -38,6 +39,7 @@ namespace SyncService {
 
         private NamedPipeServer pipe;
         private CancellationTokenSource cts;
+        private CancellationTokenSource serviceStateCts;
         private bool isServer = false;
 
         private string mutexid;
@@ -103,10 +105,33 @@ namespace SyncService {
             mountObserver = new MountBusyObserver(
                 telescopeMediator,
                 SyncServiceClient.Instance,
-                () => ReactiveMountObserverEnabled,
+                () => SyncServiceClient.Instance.ServiceActiveCached && ReactiveMountObserverEnabled,
                 () => MountSettleTime,
                 () => MountCoordinateThreshold);
             mountObserver.Start();
+
+            // Always-on, lightweight: every instance polls the fleet-wide on/off so a Start/Stop anywhere
+            // (button or instruction) is picked up here. While stopped this poll is the only activity.
+            _ = StartServiceStateWatcher();
+        }
+
+        private Task StartServiceStateWatcher() {
+            return Task.Run(async () => {
+                using (serviceStateCts = new CancellationTokenSource()) {
+                    var token = serviceStateCts.Token;
+                    while (!token.IsCancellationRequested) {
+                        try {
+                            await Task.Delay(2000, token);
+                            var active = await SyncServiceClient.Instance.RefreshServiceState(token);
+                            if (active != IsServiceActive) { IsServiceActive = active; }
+                        } catch (OperationCanceledException) {
+                        } catch (Exception ex) {
+                            // Server unreachable (e.g. host starting/restarting): keep the last known state.
+                            Logger.Debug($"Sync service state poll failed: {ex.Message}");
+                        }
+                    }
+                }
+            });
         }
 
         private Task StartServerHeartbeat() {
@@ -117,12 +142,15 @@ namespace SyncService {
                     while (!cts.IsCancellationRequested) {
                         try {
                             await Task.Delay(1000, cts.Token);
+
+                            // While the service is stopped show nothing - the plugin is meant to be idle.
+                            if (!SyncServiceServer.Instance.ServiceActive) {
+                                statusMediator.StatusUpdate(new NINA.Core.Model.ApplicationStatus() { Status = "", Source = "Sync Service" });
+                                continue;
+                            }
+
                             var status = SyncServiceServer.Instance.GetStatus();
-
-                            // Always animate the spinner so the status line never freezes on a static "Idle".
-                            bool showActivitySymbols = true;
-
-                            statusMediator.StatusUpdate(new NINA.Core.Model.ApplicationStatus() { Status = $"{status} {(showActivitySymbols ? symbols[roller++ % 4] : string.Empty)}", Source = "Sync Service" });
+                            statusMediator.StatusUpdate(new NINA.Core.Model.ApplicationStatus() { Status = $"{status} {symbols[roller++ % 4]}", Source = "Sync Service" });
                         } catch (OperationCanceledException) {
                             Logger.Info("Stopping server heartbeat");
 
@@ -138,6 +166,11 @@ namespace SyncService {
         }
 
         public override async Task Teardown() {
+            try {
+                serviceStateCts?.Cancel();
+            } catch (Exception) {
+            }
+
             // Dispose the observer first so it can send a final "mount idle" while the pipe is still alive.
             try {
                 mountObserver?.Dispose();
@@ -194,14 +227,6 @@ namespace SyncService {
                 return false;
             }
         }
-        public int DitherWaitTimeout {
-            get => pluginSettings.GetValueInt32(nameof(DitherWaitTimeout), 300);
-            set {
-                pluginSettings.SetValueInt32(nameof(DitherWaitTimeout), value);
-                RaisePropertyChanged();
-            }
-        }
-
         public bool MountSyncEnabled {
             get => pluginSettings.GetValueBoolean(nameof(MountSyncEnabled), true);
             set {
@@ -273,6 +298,39 @@ namespace SyncService {
                 RaisePropertyChanged();
             }
         }
+        private bool isServiceActive;
+        public bool IsServiceActive {
+            get => isServiceActive;
+            private set {
+                isServiceActive = value;
+                RaisePropertyChanged();
+                RaisePropertyChanged(nameof(CanStartService));
+                RaisePropertyChanged(nameof(CanStopService));
+                RaisePropertyChanged(nameof(ServiceStatusText));
+            }
+        }
+
+        public bool CanStartService => !IsServiceActive;
+        public bool CanStopService => IsServiceActive;
+        public string ServiceStatusText => IsServiceActive ? "Running" : "Stopped";
+
+        private ICommand startServiceCommand;
+        public ICommand StartServiceCommand => startServiceCommand ??= new AsyncCommand<bool>(() => SetServiceStateAsync(true));
+
+        private ICommand stopServiceCommand;
+        public ICommand StopServiceCommand => stopServiceCommand ??= new AsyncCommand<bool>(() => SetServiceStateAsync(false));
+
+        private async Task<bool> SetServiceStateAsync(bool active) {
+            try {
+                await SyncServiceClient.Instance.SetServiceState(active, CancellationToken.None);
+                IsServiceActive = active;
+                return true;
+            } catch (Exception ex) {
+                Logger.Error($"Failed to {(active ? "start" : "stop")} the sync service", ex);
+                return false;
+            }
+        }
+
         public event PropertyChangedEventHandler PropertyChanged;
         protected void RaisePropertyChanged([CallerMemberName] string propertyName = null) {
             this.PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
