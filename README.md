@@ -116,7 +116,7 @@ Start all instances' sequences at roughly the same time. The others wait at *Syn
 The plugin is the same on every machine; on a single PC running multiple N.I.N.A. instances, **one install in the plugins folder serves all of them**.
 
 ### Option A — copy the prebuilt files (simplest)
-1. Get the `SyncService` folder (or the `SyncService-x.y.z.z.zip`) — the 5 files: `SyncService.dll`, `NINA.Plugins.SyncService.Service.dll`, `Grpc.Core.Api.dll`, `GrpcDotNetNamedPipes.dll`, `Google.Protobuf.dll`.
+1. Grab the prebuilt `dist/SyncService` folder from this repo — the 5 files: `SyncService.dll`, `NINA.Plugins.SyncService.Service.dll`, `Grpc.Core.Api.dll`, `GrpcDotNetNamedPipes.dll`, `Google.Protobuf.dll`.
 2. Close N.I.N.A.
 3. Copy those files into:
    ```

@@ -15,7 +15,9 @@
 [Rr]eleases/
 
 # Plugin packaging output (build.ps1)
-dist/
+# Ship the prebuilt plugin folder (Install Option A); the versioned zips stay untracked.
+dist/*
+!dist/SyncService/
 
 bld/
 [Bb]in/
