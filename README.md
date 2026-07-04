@@ -57,6 +57,7 @@ All appear under **SyncService** in the "add instruction / add trigger" menus.
 | **Synced Center after Drift (main)** | trigger | When measured drift exceeds your threshold, waits for any autofocus to finish, pauses the others, recenters, then releases them. Shows the live *last drift / max* readout. |
 | **Synced Dither (main)** | trigger | After N exposures, waits for any autofocus to finish, pauses the others, performs one real dither of the shared mount, then releases them. |
 | **Synced Slew and Center (main)** | instruction | Waits for any autofocus to finish, then slews and plate-solve centers while the others are held until the mount settles. Safe to run **before** the others are imaging (e.g. at session start). |
+| **Synced Slew, Center and Rotate (main)** | instruction | Same as above, but also rotates to the target position angle. Waits for any autofocus to finish, then slews, plate-solve centers and rotates while the others are held until the mount settles. Safe to run **before** the others are imaging (e.g. at session start). |
 
 ### Place on every other instance — **(aux)**
 | Instruction | Type | What it does |

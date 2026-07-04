@@ -1,0 +1,134 @@
+using Newtonsoft.Json;
+using NINA.Astrometry;
+using NINA.Core.Model;
+using NINA.Core.Utility;
+using NINA.Core.Utility.WindowService;
+using NINA.Equipment.Interfaces;
+using NINA.Equipment.Interfaces.Mediator;
+using NINA.PlateSolving.Interfaces;
+using NINA.Profile;
+using NINA.Profile.Interfaces;
+using NINA.Sequencer.SequenceItem;
+using NINA.Sequencer.SequenceItem.Platesolving;
+using NINA.Sequencer.Utility;
+using SyncService.Service;
+using System;
+using System.ComponentModel.Composition;
+using System.Reflection;
+using System.Runtime.InteropServices;
+using System.Threading;
+using System.Threading.Tasks;
+
+namespace SyncService.Instructions {
+
+    [ExportMetadata("Name", "Synced Slew, Center and Rotate (main)")]
+    [ExportMetadata("Description", "Place on the mount instance. Waits for any autofocus to finish, then slews to the target, plate-solve centers and rotates to the target position angle, while every other instance is paused (held by their Synced Mount Check) until the mount settles. Unlike the other mount operations this uses the mount-busy hold rather than a rendezvous, so it is safe to run before the others have started imaging (e.g. at session start). Does nothing on instances without a mount.")]
+    [ExportMetadata("Icon", "SyncMountSVG")]
+    [ExportMetadata("Category", "SyncService")]
+    [Export(typeof(ISequenceItem))]
+    [JsonObject(MemberSerialization.OptIn)]
+    public class SyncedSlewCenterAndRotate : SequenceItem {
+        private readonly IProfileService profileService;
+        private readonly ITelescopeMediator telescopeMediator;
+        private readonly IImagingMediator imagingMediator;
+        private readonly IRotatorMediator rotatorMediator;
+        private readonly IFilterWheelMediator filterWheelMediator;
+        private readonly IGuiderMediator guiderMediator;
+        private readonly IDomeMediator domeMediator;
+        private readonly IDomeFollower domeFollower;
+        private readonly IPlateSolverFactory plateSolverFactory;
+        private readonly IWindowServiceFactory windowServiceFactory;
+        private readonly PluginOptionsAccessor pluginSettings;
+        private CenterAndRotate hosted;
+
+        [ImportingConstructor]
+        public SyncedSlewCenterAndRotate(IProfileService profileService, ITelescopeMediator telescopeMediator, IImagingMediator imagingMediator,
+                                         IRotatorMediator rotatorMediator, IFilterWheelMediator filterWheelMediator, IGuiderMediator guiderMediator,
+                                         IDomeMediator domeMediator, IDomeFollower domeFollower, IPlateSolverFactory plateSolverFactory,
+                                         IWindowServiceFactory windowServiceFactory) : base() {
+            this.profileService = profileService;
+            this.telescopeMediator = telescopeMediator;
+            this.imagingMediator = imagingMediator;
+            this.rotatorMediator = rotatorMediator;
+            this.filterWheelMediator = filterWheelMediator;
+            this.guiderMediator = guiderMediator;
+            this.domeMediator = domeMediator;
+            this.domeFollower = domeFollower;
+            this.plateSolverFactory = plateSolverFactory;
+            this.windowServiceFactory = windowServiceFactory;
+            this.hosted = NewHosted();
+            this.hosted.Inherited = true;
+
+            var assembly = this.GetType().Assembly;
+            var id = assembly.GetCustomAttribute<GuidAttribute>().Value;
+            this.pluginSettings = new PluginOptionsAccessor(profileService, Guid.Parse(id));
+        }
+
+        private CenterAndRotate NewHosted() =>
+            new CenterAndRotate(profileService, telescopeMediator, imagingMediator, rotatorMediator, filterWheelMediator, guiderMediator,
+                                domeMediator, domeFollower, plateSolverFactory, windowServiceFactory);
+
+        public override object Clone() {
+            var clone = new SyncedSlewCenterAndRotate(profileService, telescopeMediator, imagingMediator, rotatorMediator, filterWheelMediator,
+                                                      guiderMediator, domeMediator, domeFollower, plateSolverFactory, windowServiceFactory);
+            clone.CopyMetaData(this);
+            clone.hosted = (CenterAndRotate)hosted.Clone();
+            return clone;
+        }
+
+        [JsonProperty]
+        public InputCoordinates Coordinates {
+            get => hosted.Coordinates;
+            set { hosted.Coordinates = value; RaisePropertyChanged(); }
+        }
+
+        [JsonProperty]
+        public double PositionAngle {
+            get => hosted.PositionAngle;
+            set { hosted.PositionAngle = value; RaisePropertyChanged(); }
+        }
+
+        [JsonProperty]
+        public bool Inherited {
+            get => hosted.Inherited;
+            set { hosted.Inherited = value; RaisePropertyChanged(); }
+        }
+
+        private ISyncServiceClient client => SyncServiceClient.Instance;
+
+        public override void AfterParentChanged() {
+            hosted.AttachNewParent(this.Parent);
+            hosted.AfterParentChanged();
+        }
+
+        public override async Task Execute(IProgress<ApplicationStatus> progress, CancellationToken token) {
+            if (telescopeMediator.GetInfo()?.Connected != true) {
+                Logger.Info("SyncedSlewCenterAndRotate: no mount connected on this instance - skipping");
+                return;
+            }
+
+            var afTimeout = TimeSpan.FromSeconds(pluginSettings.GetValueInt32(nameof(SyncServicePlugin.AutofocusBusyWaitTimeout), 300));
+            await SyncBarrier.WaitWhileAutofocusBusy(client, afTimeout, progress, token);
+
+            var reason = string.IsNullOrWhiteSpace(Name) ? "Synced slew, center and rotate" : Name;
+            client.BeginPlannedMountOperation();
+            using var refreshCts = CancellationTokenSource.CreateLinkedTokenSource(token);
+            Task refreshTask = null;
+            try {
+                await client.SetMountBusy(reason, token);
+                refreshTask = SyncBarrier.RefreshLoop(ct => client.SetMountBusy(reason, ct), 5000, refreshCts.Token);
+                await hosted.Execute(progress, token);
+            } finally {
+                refreshCts.Cancel();
+                if (refreshTask != null) { try { await refreshTask; } catch (Exception) { } }
+                try { await client.ClearMountBusy(CancellationToken.None); } catch (Exception ex) { Logger.Error("Failed to clear mount busy", ex); }
+                client.EndPlannedMountOperation();
+                progress?.Report(new ApplicationStatus() { Status = "" });
+            }
+        }
+
+        public override string ToString() {
+            return $"Instruction: {nameof(SyncedSlewCenterAndRotate)}";
+        }
+    }
+}

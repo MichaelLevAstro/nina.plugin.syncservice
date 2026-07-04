@@ -262,6 +262,9 @@
     <DataTemplate DataType="{x:Type instruction:SyncedSlewAndCenter}">
         <nina:SequenceBlockView />
     </DataTemplate>
+    <DataTemplate DataType="{x:Type instruction:SyncedSlewCenterAndRotate}">
+        <nina:SequenceBlockView />
+    </DataTemplate>
     <DataTemplate DataType="{x:Type instruction:SyncedCenterAfterDrift}">
         <nina:SequenceBlockView>
             <nina:SequenceBlockView.SequenceItemContent>
